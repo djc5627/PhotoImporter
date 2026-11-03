@@ -44,6 +44,7 @@ def test_camera_set_changes_folder_name(tmp_path, card, library, reader, capsys)
 
 def test_missing_exiftool_reports_cleanly(tmp_path, library, monkeypatch, capsys):
     monkeypatch.setenv("PATH", "")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     monkeypatch.delenv("PHOTOIMPORTER_EXIFTOOL", raising=False)
     db = ["--db", str(tmp_path / "cli.db")]
     main([*db, "config", "--root", str(library)])

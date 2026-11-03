@@ -6,6 +6,7 @@ from datetime import date
 from pathlib import Path
 
 from .core.cards import detect_cards, scan_source
+from .core.config import new_import_folder, photos_root
 from .core.copier import execute_plan
 from .core.db import Database, default_db_path
 from .core.exif import ExifToolError, ExifToolReader, MetadataReader
@@ -13,19 +14,12 @@ from .core.indexer import scan_library
 from .core.models import Camera
 from .core.planner import ImportPlan, build_plan
 
-DATE_FORMAT = "%Y.%m.%d"
-
 
 def _progress(label: str):
     def report(done: int, total: int) -> None:
         print(f"\r{label}: {done}/{total}", end="" if done < total else "\n", file=sys.stderr)
 
     return report
-
-
-def photos_root(db: Database) -> Path:
-    stored = db.get_setting("photos_root")
-    return Path(stored) if stored else Path.home() / "Pictures"
 
 
 def _resolve_source(arg: Path | None) -> Path:
@@ -44,7 +38,7 @@ def _resolve_source(arg: Path | None) -> Path:
 def _resolve_target(args: argparse.Namespace, root: Path) -> Path:
     if args.target is not None:
         return args.target
-    return root / f"{date.today().strftime(DATE_FORMAT)} {args.new.strip()}"
+    return new_import_folder(root, args.new, date.today())
 
 
 def _print_plan(plan: ImportPlan) -> None:
