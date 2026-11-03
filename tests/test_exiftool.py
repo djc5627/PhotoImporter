@@ -1,15 +1,21 @@
 import json
-import shutil
 import subprocess
 
 import pytest
 
-from photoimporter.core.exif import ExifToolError, ExifToolReader
+from photoimporter.core.exif import ExifToolError, ExifToolNotFound, ExifToolReader, find_exiftool
 from photoimporter.core.models import PhotoMeta
 
-needs_exiftool = pytest.mark.skipif(
-    shutil.which("exiftool") is None, reason="ExifTool not installed"
-)
+
+def _has_exiftool() -> bool:
+    try:
+        find_exiftool()
+    except ExifToolNotFound:
+        return False
+    return True
+
+
+needs_exiftool = pytest.mark.skipif(not _has_exiftool(), reason="ExifTool not installed")
 
 
 def fake_run(stdout: bytes, returncode: int = 0, stderr: bytes = b""):

@@ -4,17 +4,20 @@ version = "0.1.0"
 description = "Import new photos from camera SD cards into dated, per-camera folders."
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = ["PySide6-Essentials>=6.8"]
 
 [project.scripts]
 photoimporter = "photoimporter.cli:main"
+
+[project.gui-scripts]
+photoimporter-gui = "photoimporter.ui.app:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = ["pytest>=8", "pytest-qt>=4.4", "ruff>=0.6"]
 
 [tool.ruff]
 line-length = 100

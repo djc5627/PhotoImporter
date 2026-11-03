@@ -16,6 +16,14 @@ uv run photoimporter scan                        # index existing photos (first 
 
 ## Use
 
+Desktop app:
+
+```
+uv run photoimporter-gui
+```
+
+Command line:
+
 ```
 uv run photoimporter plan E:\ --new "Halloween Hike"       # dry run
 uv run photoimporter import E:\ --new "Halloween Hike"     # copy new photos
