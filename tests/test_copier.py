@@ -81,3 +81,23 @@ def test_counter_reset_photo_is_imported(db, card, library, reader):
     plan = plan_for(db, card, library / "second", reader)
 
     assert [p.filename for g in plan.groups for p in g.new] == ["R0000002.JPG"]
+
+
+def test_photo_deleted_from_library_is_not_offered_again(db, card, library, reader):
+    target = library / "2026.11.02 Hike"
+    execute_plan(plan_for(db, card, target, reader), db)
+    (target / "ricoh gr iii" / "jpg" / "R0000002.JPG").unlink()  # e.g. a Capture One cleanup
+    scan_library(db, library, reader)
+
+    plan = build_plan(
+        card,
+        library / "later",
+        scan_source(card, reader),
+        db.existing_keys(),
+        db.cameras(),
+        db.deleted_keys(),
+        db.newest_capture_by_model(),
+    )
+
+    assert (plan.new_count, plan.already_count, plan.deleted_count) == (0, 2, 1)
+    assert plan.items == []

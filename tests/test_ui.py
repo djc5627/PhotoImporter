@@ -5,8 +5,9 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from photoimporter.core.db import Database  # noqa: E402
 from conftest import copy_by_hand  # noqa: E402
+
+from photoimporter.core.db import Database  # noqa: E402
 from photoimporter.ui.main_window import MainWindow  # noqa: E402
 
 
@@ -91,6 +92,38 @@ def test_old_style_folders_are_left_alone(qtbot, window, card, library):
     assert [p for p in library.iterdir()] == [old]
     assert (old / "R0000001.JPG").is_file()
     assert (old / "ricoh gr iii" / "jpg" / "R0000002.JPG").is_file()
+
+
+def test_deleted_photos_are_skipped_until_ticked(qtbot, window, card, library):
+    target = library / "2026.11.02 Hike"
+    window.existing_radio.setChecked(True)
+    window.existing_edit.setText(str(target))
+    window.source_edit.setText(str(card))
+    with qtbot.waitSignal(window.plan_ready, timeout=10_000):
+        window.find_button.click()
+    with qtbot.waitSignal(window.import_done, timeout=10_000):
+        window.import_button.click()
+    deleted = target / "ricoh gr iii" / "jpg" / "R0000002.JPG"
+    deleted.unlink()
+
+    with qtbot.waitSignal(window.plan_ready, timeout=10_000):
+        window.find_button.click()
+    row = window.plan_tree.topLevelItem(0)
+    assert [row.text(i) for i in range(2, 7)] == ["0", "0", "2", "1", "0"]
+    assert window.status_label.text() == (
+        "0 new photos, 2 already imported, 1 deleted since import (skipped)."
+    )
+    assert not window.import_button.isEnabled()
+    assert window.include_deleted_check.isVisibleTo(window)
+    assert not window.include_older_check.isVisibleTo(window)
+
+    window.include_deleted_check.setChecked(True)
+    assert window.import_button.isEnabled()
+    assert window.plan_tree.topLevelItem(0).text(1) == f"ricoh gr iii{os.sep}jpg"
+    with qtbot.waitSignal(window.import_done, timeout=10_000):
+        window.import_button.click()
+    assert deleted.is_file()
+    assert not window.include_deleted_check.isChecked()
 
 
 def test_import_requires_a_target(qtbot, window, card):

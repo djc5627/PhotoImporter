@@ -21,6 +21,24 @@ def test_plan_then_import_with_new_folder(tmp_path, card, library, reader, capsy
     assert "Nothing new to import." in capsys.readouterr().out
 
 
+def test_deleted_photos_need_include_flag(tmp_path, card, library, reader, capsys):
+    db = ["--db", str(tmp_path / "cli.db")]
+    run = lambda *args: main([*db, *args], reader_factory=lambda: reader)  # noqa: E731
+    run("config", "--root", str(library))
+    run("import", str(card), "--target", str(library / "t"), "--yes")
+    (library / "t" / "ricoh gr iii" / "jpg" / "R0000002.JPG").unlink()
+    capsys.readouterr()
+
+    assert run("import", str(card), "--target", str(library / "t"), "--yes") == 0
+    out = capsys.readouterr().out
+    assert "1 deleted since import (skipped)" in out
+    assert "--include-deleted" in out
+    assert "Nothing new to import." in out
+
+    run("import", str(card), "--target", str(library / "t"), "--yes", "--include-deleted")
+    assert (library / "t" / "ricoh gr iii" / "jpg" / "R0000002.JPG").is_file()
+
+
 def test_camera_set_changes_folder_name(tmp_path, card, library, reader, capsys):
     db = ["--db", str(tmp_path / "cli.db")]
     run = lambda *args: main([*db, *args], reader_factory=lambda: reader)  # noqa: E731

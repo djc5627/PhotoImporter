@@ -8,6 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import QThreadPool, Signal
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFileDialog,
     QGridLayout,
     QGroupBox,
@@ -34,6 +35,10 @@ from ..core.exif import ExifToolReader, MetadataReader
 from ..core.indexer import ScanResult, scan_library
 from ..core.planner import CameraGroup, ImportPlan, build_plan
 from .workers import ReportProgress, Worker
+
+
+def _photos(n: int) -> str:
+    return f"{n} photo" if n == 1 else f"{n} photos"
 
 
 class MainWindow(QMainWindow):
@@ -136,13 +141,43 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(box)
         self.plan_tree = QTreeWidget()
         self.plan_tree.setHeaderLabels(
-            ["Camera", "Saved to", "New JPG", "New RAW", "Already imported"]
+            [
+                "Camera",
+                "Saved to",
+                "New JPG",
+                "New RAW",
+                "Already imported",
+                "Deleted",
+                "Probably deleted",
+            ]
+        )
+        header_item = self.plan_tree.headerItem()
+        header_item.setToolTip(5, "Imported before, then deleted from your library")
+        header_item.setToolTip(
+            6, "Older than the newest library photo from this camera, so most likely deleted"
         )
         self.plan_tree.setRootIsDecorated(False)
         header = self.plan_tree.header()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.plan_tree)
+
+        self.include_deleted_check = QCheckBox()
+        self.include_deleted_check.setToolTip(
+            "Photos that were imported before and later deleted from your library,\n"
+            "for example during a cleanup in Capture One. Skipped unless ticked."
+        )
+        self.include_older_check = QCheckBox()
+        self.include_older_check.setToolTip(
+            "Photos that are not in your library but are older than the newest photo\n"
+            "already there from the same camera, so they were most likely imported and\n"
+            "deleted before the app kept a history. Skipped unless ticked."
+        )
+        for check in (self.include_deleted_check, self.include_older_check):
+            check.toggled.connect(self._on_include_toggled)
+            layout.addWidget(check)
+        self._refresh_include_checks()
         return box
 
     def _build_footer(self) -> QHBoxLayout:
@@ -259,40 +294,86 @@ class MainWindow(QMainWindow):
                 scan_library(db, root, reader, lambda d, t: report("Indexing library", d, t))
                 photos = scan_source(source, reader, lambda d, t: report("Reading card", d, t))
                 # The target is filled in at import time, so it can still be changed.
-                return build_plan(source, root, photos, db.existing_keys(), db.cameras())
+                return build_plan(
+                    source,
+                    root,
+                    photos,
+                    db.existing_keys(),
+                    db.cameras(),
+                    db.deleted_keys(),
+                    db.newest_capture_by_model(),
+                )
             finally:
                 db.close()
 
-        self.plan = None
-        self.plan_tree.clear()
-        self.import_button.setEnabled(False)
+        self._set_plan(None)
         self._run("Looking for new photos", task, self._on_plan_ready)
 
     def _on_plan_ready(self, plan: ImportPlan) -> None:
-        self.plan = plan
+        self._set_plan(plan)
         self._refresh_library_label()
-        for group in plan.groups:
-            self.plan_tree.addTopLevelItem(self._plan_row(group))
-        self.import_button.setEnabled(plan.new_count > 0)
-        if plan.new_count:
-            self.status_label.setText(
-                f"{plan.new_count} new photos, {plan.already_count} already imported."
-            )
-        else:
-            self.status_label.setText(
-                f"Nothing new: all {plan.already_count} photos already imported."
-            )
         self.plan_ready.emit(plan)
 
+    def _set_plan(self, plan: ImportPlan | None) -> None:
+        """Show a fresh plan. Deleted photos always start out skipped."""
+        self.plan = plan
+        for check in (self.include_deleted_check, self.include_older_check):
+            check.blockSignals(True)
+            check.setChecked(False)
+            check.blockSignals(False)
+        self._refresh_plan_view()
+
+    def _on_include_toggled(self) -> None:
+        if self.plan is not None:
+            self.plan.include_deleted = self.include_deleted_check.isChecked()
+            self.plan.include_older = self.include_older_check.isChecked()
+        self._refresh_plan_view()
+
+    def _refresh_plan_view(self) -> None:
+        plan = self.plan
+        self.plan_tree.clear()
+        self._refresh_include_checks()
+        if plan is None:
+            self.import_button.setEnabled(False)
+            self.import_button.setText("Import")
+            return
+        for group in plan.groups:
+            self.plan_tree.addTopLevelItem(self._plan_row(plan, group))
+        self.import_button.setEnabled(plan.copy_count > 0)
+        self.import_button.setText(f"Import {plan.copy_count}" if plan.copy_count else "Import")
+        self.status_label.setText(plan.summary())
+
+    def _refresh_include_checks(self) -> None:
+        plan = self.plan
+        deleted = plan.deleted_count if plan else 0
+        older = plan.older_count if plan else 0
+        self.include_deleted_check.setText(
+            f"Include {_photos(deleted)} deleted since import (imported before, then deleted)"
+        )
+        self.include_older_check.setText(
+            f"Include {_photos(older)} probably deleted earlier "
+            "(older than your newest library photo from that camera)"
+        )
+        self.include_deleted_check.setVisible(deleted > 0)
+        self.include_older_check.setVisible(older > 0)
+
     @staticmethod
-    def _plan_row(group: CameraGroup) -> QTreeWidgetItem:
+    def _plan_row(plan: ImportPlan, group: CameraGroup) -> QTreeWidgetItem:
         cam = group.camera
         counts = group.new_by_kind()
         name = cam.nickname if group.registered else f"{cam.nickname} (new camera)"
-        kinds = sorted({p.kind for p in group.new})
+        kinds = sorted({p.kind for p in plan.to_copy(group)})
         folders = ", ".join(str(Path(cam.folder_name, cam.subdir_for(k))) for k in kinds) or "—"
         return QTreeWidgetItem(
-            [name, folders, str(counts["jpg"]), str(counts["raw"]), str(len(group.already))]
+            [
+                name,
+                folders,
+                str(counts["jpg"]),
+                str(counts["raw"]),
+                str(len(group.already)),
+                str(len(group.deleted)),
+                str(len(group.older)),
+            ]
         )
 
     # Importing
@@ -300,13 +381,13 @@ class MainWindow(QMainWindow):
     def start_import(self) -> None:
         plan = self.plan
         target = self.target_dir()
-        if plan is None or plan.new_count == 0:
+        if plan is None or plan.copy_count == 0:
             return
         if target is None:
             self._show_error("Enter a description for the new folder, or choose an existing one.")
             return
         plan.target_dir = target
-        if not self._confirm(f"Copy {plan.new_count} photos into\n{target}?"):
+        if not self._confirm(f"Copy {plan.copy_count} photos into\n{target}?"):
             return
         db_path, cancel = self.db_path, self._cancel
         cancel.clear()
@@ -327,8 +408,7 @@ class MainWindow(QMainWindow):
 
     def _on_import_done(self, result: CopyResult) -> None:
         self.cancel_button.setVisible(False)
-        self.plan = None
-        self.import_button.setEnabled(False)
+        self._set_plan(None)
         self._refresh_library_label()
         message = f"Copied {result.copied} photos"
         if result.skipped:
@@ -383,6 +463,8 @@ class MainWindow(QMainWindow):
             self.find_button,
             self.detect_button,
             self.browse_source_button,
+            self.include_deleted_check,
+            self.include_older_check,
         ):
             widget.setEnabled(not busy)
         if busy:
