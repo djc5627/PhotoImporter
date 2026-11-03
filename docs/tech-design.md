@@ -140,6 +140,6 @@ tests/             # pytest for core; fixtures with sample files per camera
 - The photos root defaults to `%USERPROFILE%\Pictures`.
 - The date format for new folders is `YYYY.MM.DD`, editable in settings.
 - Older folders use `M.D.YYYY Description` and must never be renamed or moved: Capture One links to those paths. The app only reads library folders, never changes or deletes anything in them, and can import into an old folder as an existing folder. Duplicate detection goes by EXIF and filename, not folder names.
-- Cards are imported only when nearly full and are not formatted after each import, so a card usually holds many already-imported or deleted photos.
+- Cards are formatted only when nearly full, not after each import, so a card usually holds photos from several earlier imports, including some later deleted from the library.
 - Camera folder names are lowercase nicknames (e.g. `ricoh`, `sony rx100`).
 - A single card only contains photos from one camera. Mixed cards still work, since grouping is per file.
