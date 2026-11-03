@@ -6,6 +6,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from photoimporter.core.db import Database  # noqa: E402
+from conftest import copy_by_hand  # noqa: E402
 from photoimporter.ui.main_window import MainWindow  # noqa: E402
 
 
@@ -67,6 +68,29 @@ def test_import_into_existing_folder(qtbot, window, card, library):
         window.import_button.click()
 
     assert (existing / "ricoh gr iii" / "jpg" / "R0000002.JPG").is_file()
+
+
+def test_old_style_folders_are_left_alone(qtbot, window, card, library):
+    """Pre-app folders use 'M.D.YYYY Description'. Capture One links to those
+    paths, so they must still count as imported and never be renamed or moved."""
+    old = library / "11.2.2026 Hike"
+    copy_by_hand(card / "DCIM" / "100RICOH" / "R0000001.JPG", old / "R0000001.JPG")
+    before = sorted(p.relative_to(library) for p in library.rglob("*"))
+
+    window.existing_radio.setChecked(True)
+    window.existing_edit.setText(str(old))
+    window.source_edit.setText(str(card))
+    with qtbot.waitSignal(window.plan_ready, timeout=10_000):
+        window.find_button.click()
+    assert window.plan_tree.topLevelItem(0).text(3) == "1"  # already imported
+    with qtbot.waitSignal(window.import_done, timeout=10_000):
+        window.import_button.click()
+
+    after = sorted(p.relative_to(library) for p in library.rglob("*"))
+    assert set(before) <= set(after)
+    assert [p for p in library.iterdir()] == [old]
+    assert (old / "R0000001.JPG").is_file()
+    assert (old / "ricoh gr iii" / "jpg" / "R0000002.JPG").is_file()
 
 
 def test_import_requires_a_target(qtbot, window, card):
