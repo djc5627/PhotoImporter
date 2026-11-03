@@ -25,6 +25,8 @@ class CameraGroup:
     # Not in the library or its history, but older than the newest library photo from this
     # camera, so most likely imported and deleted before the history existed.
     older: list[PhotoFile] = field(default_factory=list)
+    # For an unregistered camera: whether its folder names came from existing library photos.
+    library_match: bool = False
 
     def new_by_kind(self) -> Counter[str]:
         return Counter(p.kind or "other" for p in self.new)

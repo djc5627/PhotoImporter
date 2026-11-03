@@ -27,13 +27,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..core.cameras import LibraryLayout, apply_camera_suggestions
 from ..core.cards import detect_cards, scan_source
 from ..core.config import new_import_folder, photos_root
 from ..core.copier import CopyResult, execute_plan
 from ..core.db import Database
 from ..core.exif import ExifToolReader, MetadataReader
 from ..core.indexer import ScanResult, scan_library
+from ..core.models import Camera
 from ..core.planner import CameraGroup, ImportPlan, build_plan
+from .camera_dialog import CameraDialog
+from .card_watcher import CardWatcher
 from .workers import ReportProgress, Worker
 
 
@@ -47,15 +51,23 @@ class MainWindow(QMainWindow):
     task_failed = Signal(str)
 
     def __init__(
-        self, db_path: Path, reader_factory: Callable[[], MetadataReader] = ExifToolReader
+        self,
+        db_path: Path,
+        reader_factory: Callable[[], MetadataReader] = ExifToolReader,
+        card_detector: Callable[[], list[Path]] = detect_cards,
+        card_poll_ms: int = 2000,
     ):
         super().__init__()
         self.db_path = db_path
         self.reader_factory = reader_factory
+        self.card_detector = card_detector
         self.db = Database(db_path)
         self.plan: ImportPlan | None = None
+        self.camera_folders: list[str] = []
         self._worker: Worker | None = None
         self._cancel = threading.Event()
+        self._busy = False
+        self._pending_card: Path | None = None
 
         self.setWindowTitle("Photo Importer")
         self.resize(860, 620)
@@ -70,7 +82,11 @@ class MainWindow(QMainWindow):
 
         self._refresh_library_label()
         self._refresh_target_preview()
-        self.detect_card()
+        self.status_label.setText("Insert an SD card, or browse to a card or folder.")
+        self.card_watcher = CardWatcher(card_detector, card_poll_ms, self)
+        self.card_watcher.inserted.connect(self.on_card_inserted)
+        self.card_watcher.removed.connect(self.on_card_removed)
+        self.card_watcher.start()
 
     # Layout
 
@@ -267,12 +283,29 @@ class MainWindow(QMainWindow):
             self.source_edit.setText(str(Path(folder)))
 
     def detect_card(self) -> None:
-        cards = detect_cards()
+        cards = self.card_detector()
         if cards:
             self.source_edit.setText(str(cards[0]))
             self.status_label.setText(f"Card detected: {', '.join(map(str, cards))}")
         else:
             self.status_label.setText("No card detected. Browse to a card or folder.")
+
+    def on_card_inserted(self, card: Path) -> None:
+        """A card was inserted (or was already in when the app started): look at it."""
+        if self._busy:
+            self._pending_card = card
+            self.status_label.setText(f"Card inserted: {card}. Checking it when this finishes…")
+            return
+        self.source_edit.setText(str(card))
+        self.find_new_photos()
+
+    def on_card_removed(self, card: Path) -> None:
+        if self._pending_card == card:
+            self._pending_card = None
+        if self._busy or Path(self.source_edit.text().strip() or ".") != card:
+            return
+        self._set_plan(None)
+        self.status_label.setText(f"Card removed: {card}.")
 
     # Planning
 
@@ -294,7 +327,7 @@ class MainWindow(QMainWindow):
                 scan_library(db, root, reader, lambda d, t: report("Indexing library", d, t))
                 photos = scan_source(source, reader, lambda d, t: report("Reading card", d, t))
                 # The target is filled in at import time, so it can still be changed.
-                return build_plan(
+                plan = build_plan(
                     source,
                     root,
                     photos,
@@ -303,13 +336,17 @@ class MainWindow(QMainWindow):
                     db.deleted_keys(),
                     db.newest_capture_by_model(),
                 )
+                layout = LibraryLayout.from_db(db, root)
+                apply_camera_suggestions(plan, layout)
+                return plan, layout.camera_folders
             finally:
                 db.close()
 
         self._set_plan(None)
         self._run("Looking for new photos", task, self._on_plan_ready)
 
-    def _on_plan_ready(self, plan: ImportPlan) -> None:
+    def _on_plan_ready(self, result: tuple[ImportPlan, list[str]]) -> None:
+        plan, self.camera_folders = result
         self._set_plan(plan)
         self._refresh_library_label()
         self.plan_ready.emit(plan)
@@ -386,6 +423,16 @@ class MainWindow(QMainWindow):
         if target is None:
             self._show_error("Enter a description for the new folder, or choose an existing one.")
             return
+        for group in plan.groups:
+            if group.registered or not plan.to_copy(group):
+                continue
+            camera = self._ask_camera(group)
+            if camera is None:
+                self.status_label.setText("Import cancelled.")
+                return
+            self.db.save_camera(camera)
+            group.camera, group.registered = camera, True
+            self._refresh_plan_view()
         plan.target_dir = target
         if not self._confirm(f"Copy {plan.copy_count} photos into\n{target}?"):
             return
@@ -442,6 +489,12 @@ class MainWindow(QMainWindow):
     def _finish(self, on_done: Callable[[object], None], result: object) -> None:
         self._set_busy(False)
         on_done(result)
+        self._run_pending_card()
+
+    def _run_pending_card(self) -> None:
+        card, self._pending_card = self._pending_card, None
+        if card is not None and not self._busy:
+            self.on_card_inserted(card)
 
     def _on_progress(self, label: str, done: int, total: int) -> None:
         self.progress_bar.setRange(0, total)
@@ -454,8 +507,10 @@ class MainWindow(QMainWindow):
         self.status_label.setText("Failed.")
         self._show_error(message)
         self.task_failed.emit(message)
+        self._run_pending_card()
 
     def _set_busy(self, busy: bool) -> None:
+        self._busy = busy
         self.progress_bar.setVisible(busy)
         for widget in (
             self.change_root_button,
@@ -472,6 +527,16 @@ class MainWindow(QMainWindow):
 
     # Dialogs (separate methods so tests can replace them)
 
+    def _ask_camera(self, group: CameraGroup) -> Camera | None:
+        dialog = CameraDialog(
+            group.camera,
+            len(self.plan.to_copy(group)) if self.plan else 0,
+            group.library_match,
+            self.camera_folders,
+            self,
+        )
+        return dialog.camera() if dialog.exec() == CameraDialog.DialogCode.Accepted else None
+
     def _confirm(self, text: str) -> bool:
         answer = QMessageBox.question(self, "Photo Importer", text)
         return answer == QMessageBox.StandardButton.Yes
@@ -483,6 +548,7 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "Photo Importer", text)
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self.card_watcher.stop()
         self._cancel.set()
         QThreadPool.globalInstance().waitForDone()
         self.db.close()

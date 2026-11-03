@@ -5,6 +5,7 @@ import sys
 from datetime import date
 from pathlib import Path
 
+from .core.cameras import LibraryLayout, apply_camera_suggestions
 from .core.cards import detect_cards, scan_source
 from .core.config import new_import_folder, photos_root
 from .core.copier import execute_plan
@@ -93,6 +94,7 @@ def _make_plan(args: argparse.Namespace, db: Database, reader: MetadataReader) -
         db.deleted_keys(),
         db.newest_capture_by_model(),
     )
+    apply_camera_suggestions(plan, LibraryLayout.from_db(db, root))
     plan.include_deleted = args.include_deleted
     plan.include_older = args.include_older
     return plan

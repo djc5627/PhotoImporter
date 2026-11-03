@@ -45,7 +45,7 @@ Decisions so far:
 **Camera registry:**
 - Keyed on EXIF `Make` + `Model`.
 - Stores a nickname, the camera folder name (e.g. `ricoh`), and the JPG and raw subfolder names (default `jpg`/`raw`).
-- When an unknown camera is found, a dialog asks for these, pre-filled from EXIF.
+- When an unregistered camera has photos to import, a dialog asks for these on Import. They are pre-filled from the library: the camera folder and subfolders most often used by that camera model's photos in `<date>/<camera>/<subfolder>/<photo>` paths, falling back to the lowercase EXIF model and `jpg`/`raw`. This also matches cameras that were used before the app existed. The CLI uses the same suggestions without asking.
 
 **Deleted photos:**
 Each card photo falls into one of four groups:
@@ -96,7 +96,8 @@ tests/             # pytest for core; fixtures with sample files per camera
 **Threading:** EXIF reads, thumbnail generation and copies all run on `QThreadPool` workers and report back through signals. Nothing slow runs on the GUI thread.
 
 **Card detection:**
-- Poll drive letters every ~2 s and look for a `DCIM` folder. Check whether `os.listdrives()` (Python 3.12+) fits; otherwise iterate drive letters.
+- Poll drive letters every ~2 s and look for a `DCIM` folder, via `os.listdrives()` (Python 3.12+) or by iterating drive letters. Only removable and fixed local drives are checked: probing a disconnected network drive can block for seconds.
+- An inserted card (or one already in when the app starts) fills in the source and starts "Find new photos". If a task is running, the card is checked once it finishes. Removing the card clears its results.
 - Limitation: a camera connected by USB in MTP mode has no drive letter and won't be detected. SD card readers work.
 
 ## UI flow
@@ -114,13 +115,13 @@ tests/             # pytest for core; fixtures with sample files per camera
 5. **Settings:** photos root, date format, camera registry editor.
 
 ## Milestones
-1. **Core engine + CLI (no Qt):**
+1. **Core engine + CLI (no Qt):** Done.
    - Project setup (uv, ruff, pytest).
    - ExifTool wrapper, validated against a real file from each camera, to confirm tag names and the Canon format.
    - Indexer, planner, copier.
    - `photoimporter plan <card>` dry run, run against your real library to prove dedup.
-2. **Minimal PySide6 UI:** target folder picker, manual card browse, plan summary, import with progress.
-3. **Card auto-detect + camera registration dialog.**
+2. **Minimal PySide6 UI:** target folder picker, manual card browse, plan summary, import with progress. Done.
+3. **Card auto-detect + camera registration dialog.** Done.
 4. **Thumbnail preview grid.**
 5. **Settings screen + PyInstaller packaging** with a bundled `exiftool.exe`.
 
