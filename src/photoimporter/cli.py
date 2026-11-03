@@ -114,10 +114,8 @@ def cmd_cameras(args, db, reader_factory) -> int:
     if not cameras:
         print("No cameras registered yet.")
     for cam in cameras.values():
-        print(
-            f"{cam.make} | {cam.model} -> {cam.nickname}: "
-            f"{cam.folder_name}\\{cam.jpg_dir}, {cam.folder_name}\\{cam.raw_dir}"
-        )
+        jpg, raw = (Path(cam.folder_name, d) for d in (cam.jpg_dir, cam.raw_dir))
+        print(f"{cam.make} | {cam.model} -> {cam.nickname}: {jpg}, {raw}")
     return 0
 
 
