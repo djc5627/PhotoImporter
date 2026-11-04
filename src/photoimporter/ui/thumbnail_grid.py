@@ -4,7 +4,18 @@ import threading
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, QRectF, QRunnable, QSize, Qt, QThreadPool, QUrl, Signal
+from PySide6.QtCore import (
+    QEvent,
+    QObject,
+    QRectF,
+    QRunnable,
+    QSize,
+    Qt,
+    QThreadPool,
+    QTimer,
+    QUrl,
+    Signal,
+)
 from PySide6.QtGui import (
     QColor,
     QDesktopServices,
@@ -41,7 +52,8 @@ from ..core.thumbnails import Shot, Thumbnail, ThumbnailSource, group_shots
 SIZES = [("Small", QSize(120, 90)), ("Medium", QSize(160, 120)), ("Large", QSize(320, 240))]
 DEFAULT_SIZE = 1
 SMALL_IMAGE = QSize(160, 120)  # what the camera's small thumbnail gives
-LARGE_IMAGE = QSize(320, 240)
+LARGE_IMAGE = QSize(384, 288)  # room for Large tiles stretched to fill the row
+TILE_PADDING = QSize(20, 40)  # around the image: the border and the file name
 
 
 def _is_large(size: QSize) -> bool:
@@ -157,7 +169,8 @@ def _placeholder(text: str, size: QSize) -> QPixmap:
 
 def _with_status(pixmap: QPixmap, status: str, size: QSize) -> QPixmap:
     """The thumbnail, shrunk to fit `size`, with its status as a label in the top-left corner."""
-    if pixmap.width() > size.width() or pixmap.height() > size.height():
+    fits = pixmap.size().scaled(size, Qt.AspectRatioMode.KeepAspectRatio)
+    if pixmap.size() != fits:  # tiles stretch a little to fill the row
         pixmap = pixmap.scaled(
             size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
         )
@@ -243,6 +256,11 @@ class ThumbnailGrid(QWidget):
         self.cache: dict[Path, QImage | None] = {}
         self.large_cache: dict[Path, QImage | None] = {}
         self.size_index = DEFAULT_SIZE
+        self._tile = SIZES[DEFAULT_SIZE][1]  # the image area of each tile, after fitting
+        self._fit_timer = QTimer(self)
+        self._fit_timer.setSingleShot(True)
+        self._fit_timer.setInterval(40)
+        self._fit_timer.timeout.connect(self._fit)
         self._statuses: dict[Path, str] = {}
         self._items: dict[Path, list[QListWidgetItem]] = {}
         self._job: ThumbnailJob | None = None
@@ -296,7 +314,9 @@ class ThumbnailGrid(QWidget):
         self.list.itemClicked.connect(self._on_clicked)
         self.list.itemDoubleClicked.connect(self._on_double_clicked)
         self.list.installEventFilter(self)
-        self.list.viewport().installEventFilter(self)  # Ctrl+scroll arrives here
+        self.list.viewport().installEventFilter(self)  # Ctrl+scroll and resizes arrive here
+        # Always there, so it appearing doesn't change the width and the columns.
+        self.list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         layout.addWidget(self.list)
         self._apply_size()
         self._refresh_buttons()
@@ -319,41 +339,64 @@ class ThumbnailGrid(QWidget):
         self._rebuild()
 
     @property
-    def thumb_size(self) -> QSize:
+    def nominal_size(self) -> QSize:
+        """The image size chosen with the slider."""
         return SIZES[self.size_index][1]
+
+    @property
+    def thumb_size(self) -> QSize:
+        """The image size actually shown: the chosen one, stretched or shrunk to fill rows."""
+        return self._tile
 
     def set_thumbnail_size(self, index: int) -> None:
         """Show tiles at SIZES[index]: 0 small, 1 medium, 2 large."""
         index = max(0, min(index, len(SIZES) - 1))
         if index == self.size_index:
             return
-        large_before = _is_large(self.thumb_size)
+        large_before = _is_large(self.nominal_size)
         self.size_index = index
         self._apply_size()
-        if _is_large(self.thumb_size) != large_before:
+        if _is_large(self.nominal_size) != large_before:
             self._rebuild()  # loads the other kind of preview
-        else:
-            for i in range(self.list.count()):
-                item = self.list.item(i)
-                item.setSizeHint(self.list.gridSize())
-                self._set_icon(item, item.data(Qt.ItemDataRole.UserRole).primary.path)
         self.size_changed.emit(index)
 
     def _apply_size(self) -> None:
-        size = self.thumb_size
         self.size_slider.blockSignals(True)
         self.size_slider.setValue(self.size_index)
         self.size_slider.blockSignals(False)
         name = SIZES[self.size_index][0]
         self.size_label.setText(name)
         self.size_slider.setToolTip(f"Thumbnail size: {name} (Ctrl+scroll over the photos)")
-        self._loading = _placeholder("Loading…", size)
-        self._missing = _placeholder("No preview", size)
-        self.list.setIconSize(size)
-        self.list.setGridSize(QSize(size.width() + 20, size.height() + 40))
+        self._fit(force=True)
+
+    def columns_for(self, width: int) -> int:
+        """Columns that fill `width`: as many whole tiles as fit, plus one more if at least
+        half of it would; the tiles are then resized so the columns fill the row exactly."""
+        cell = self.nominal_size.width() + TILE_PADDING.width()
+        return max(1, int(width / cell + 0.5))
+
+    def _fit(self, force: bool = False) -> None:
+        """Size the tiles so whole columns fill the grid's width."""
+        nominal = self.nominal_size
+        width = self.list.viewport().width()
+        # A few pixels spare: Qt wraps a tile that would end exactly at the edge.
+        image_width = max((width - 4) // self.columns_for(width) - TILE_PADDING.width(), 40)
+        cell_width = image_width + TILE_PADDING.width()
+        tile = QSize(image_width, round(image_width * nominal.height() / nominal.width()))
+        if tile == self._tile and not force:
+            return
+        self._tile = tile
+        self._loading = _placeholder("Loading…", tile)
+        self._missing = _placeholder("No preview", tile)
+        self.list.setIconSize(tile)
+        self.list.setGridSize(QSize(cell_width, tile.height() + TILE_PADDING.height()))
+        for i in range(self.list.count()):
+            item = self.list.item(i)
+            item.setSizeHint(self.list.gridSize())
+            self._set_icon(item, item.data(Qt.ItemDataRole.UserRole).primary.path)
 
     def _cache(self) -> dict[Path, QImage | None]:
-        return self.large_cache if _is_large(self.thumb_size) else self.cache
+        return self.large_cache if _is_large(self.nominal_size) else self.cache
 
     def refresh_checks(self) -> None:
         """Update highlights and counts after the plan's selection changed elsewhere."""
@@ -443,6 +486,8 @@ class ThumbnailGrid(QWidget):
         self._open(item)
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        if obj is self.list.viewport() and event.type() == QEvent.Type.Resize:
+            self._fit_timer.start()  # once resizing pauses, not on every pixel
         if (
             obj is self.list.viewport()
             and event.type() == QEvent.Type.Wheel
@@ -523,7 +568,7 @@ class ThumbnailGrid(QWidget):
             self.list.addItem(item)
         self._refresh_count()
         if to_load:
-            large = _is_large(self.thumb_size)
+            large = _is_large(self.nominal_size)
             job = ThumbnailJob(to_load, self.source_factory, large)
             job.setAutoDelete(False)
             job.signals.loaded.connect(
@@ -555,7 +600,7 @@ class ThumbnailGrid(QWidget):
 
     def _on_loaded(self, path: Path, image: QImage | None, large: bool = False) -> None:
         (self.large_cache if large else self.cache)[path] = image
-        if large != _is_large(self.thumb_size):
+        if large != _is_large(self.nominal_size):
             return  # the size changed since this was asked for
         for item in self._items.get(path, []):
             self._set_icon(item, path)

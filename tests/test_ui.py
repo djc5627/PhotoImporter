@@ -54,6 +54,8 @@ def window(qtbot, tmp_path, library, reader, monkeypatch):
         deleted_staging=tmp_path / "deleted",
     )
     qtbot.addWidget(win)
+    # Opening a photo (double-click) would start the system viewer.
+    monkeypatch.setattr(win.grid, "_open", lambda item: None)
     win.cards = []
     win.errors, win.notices, win.asked_cameras = [], [], []
 
@@ -368,14 +370,14 @@ def test_size_slider_switches_to_large_previews_and_is_remembered(qtbot, window,
 
     with qtbot.waitSignal(grid.thumbnails_loaded, timeout=10_000):
         grid.size_slider.setValue(2)
-    assert grid.list.iconSize().width() == 320
+    assert grid.nominal_size.width() == 320
     assert grid.size_label.text() == "Large"
     assert FakeThumbnails.large_calls  # asked for the bigger embedded previews
-    assert grid.large_cache[jpg].width() == 320
+    assert grid.large_cache[jpg].width() == 384  # room to stretch
 
     FakeThumbnails.calls.clear()
     grid.size_slider.setValue(0)  # small: reuses the medium thumbnails, nothing reloaded
-    assert grid.list.iconSize().width() == 120
+    assert grid.nominal_size.width() == 120
     assert not FakeThumbnails.calls
     assert window.db.get_setting("thumbnail_size") == "0"
 
@@ -397,6 +399,49 @@ def test_size_slider_switches_to_large_previews_and_is_remembered(qtbot, window,
     again = MainWindow(window.db_path, card_detector=lambda: [], update_checker=None)
     qtbot.addWidget(again)
     assert again.grid.size_label.text() == "Small"
+
+
+@pytest.mark.parametrize(
+    ("index", "width", "columns"),
+    [
+        (1, 1240, 7),  # 7.05 tiles of 180 px: 7, stretched a little
+        (1, 1150, 6),  # 6.4: 6
+        (1, 1080, 6),  # exactly 6
+        (1, 1170, 7),  # 6.5: at least half of a 7th fits, so 7, shrunk a little
+        (2, 1240, 4),  # Large 3.6 tiles: 4
+        (0, 1240, 9),  # Small 8.9: 9
+        (1, 100, 1),  # never fewer than one
+    ],
+)
+def test_columns_fill_the_row(qtbot, index, width, columns):
+    from photoimporter.ui.thumbnail_grid import ThumbnailGrid
+
+    grid = ThumbnailGrid(FakeThumbnails)
+    qtbot.addWidget(grid)
+    grid.set_thumbnail_size(index)
+    assert grid.columns_for(width) == columns
+
+
+def test_tiles_resize_with_the_window(qtbot, window, card):
+    from conftest import make_file
+
+    for i in range(3, 20):  # enough photos for a full row
+        make_file(card / "DCIM" / "100RICOH" / f"R00000{i:02d}.JPG", f"jpg{i}".encode())
+    window.source_edit.setText(str(card))
+    with qtbot.waitSignal(window.grid.thumbnails_loaded, timeout=10_000):
+        window.find_button.click()
+    grid = window.grid
+    window.show()
+    for width in (900, 1270, 700):
+        window.resize(width, 700)
+        qtbot.waitUntil(lambda: grid.thumb_size == grid.list.iconSize(), timeout=2_000)
+        qtbot.wait(100)  # the refit waits for resizing to pause
+        viewport = grid.list.viewport().width()
+        columns = grid.columns_for(viewport)
+        tops = [grid.list.visualItemRect(grid.list.item(i)).top() for i in range(grid.list.count())]
+        assert tops[:columns] == [tops[0]] * min(columns, len(tops))  # Qt lays out that many
+        assert viewport - grid.list.gridSize().width() * columns <= 4 + columns  # no gap
+        assert abs(grid.thumb_size.width() - 160) <= 160 * 0.2  # close to Medium
 
 
 def find_with_sony_and_one_imported(qtbot, window, card, library):
