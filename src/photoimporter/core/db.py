@@ -205,6 +205,10 @@ class Database:
         )
         self.conn.commit()
 
+    def delete_camera(self, make: str, model: str) -> None:
+        self.conn.execute("DELETE FROM cameras WHERE make = ? AND model = ?", (make, model))
+        self.conn.commit()
+
     # Import log
 
     def start_import(self, source: Path, target_dir: Path) -> int:

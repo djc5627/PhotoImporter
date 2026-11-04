@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -28,10 +29,22 @@ class ExifToolNotFound(ExifToolError):
     pass
 
 
+def bundled_exiftool() -> Path | None:
+    """The copy shipped inside the installed app, if this is the packaged app."""
+    if not getattr(sys, "frozen", False):
+        return None
+    exe = Path(sys.executable).parent / "exiftool" / "exiftool.exe"
+    return exe if exe.is_file() else None
+
+
 def find_exiftool() -> str:
+    # PHOTOIMPORTER_EXIFTOOL is also how the app passes on the path chosen in Settings.
     env = os.environ.get("PHOTOIMPORTER_EXIFTOOL")
     if env and Path(env).is_file():
         return env
+    bundled = bundled_exiftool()
+    if bundled:
+        return str(bundled)
     found = shutil.which("exiftool")
     if found:
         return found

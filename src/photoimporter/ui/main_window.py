@@ -30,7 +30,13 @@ from PySide6.QtWidgets import (
 
 from ..core.cameras import LibraryLayout, apply_camera_suggestions
 from ..core.cards import detect_cards, scan_source
-from ..core.config import new_import_folder, photos_root
+from ..core.config import (
+    apply_exiftool_setting,
+    date_format,
+    find_on_insert,
+    new_import_folder,
+    photos_root,
+)
 from ..core.copier import CopyResult, execute_plan
 from ..core.db import Database
 from ..core.exif import ExifToolReader, MetadataReader
@@ -40,6 +46,7 @@ from ..core.planner import CameraGroup, ImportPlan, build_plan
 from ..core.thumbnails import ExifToolThumbnails, ThumbnailSource
 from .camera_dialog import CameraDialog
 from .card_watcher import CardWatcher
+from .settings_dialog import SettingsDialog
 from .thumbnail_grid import ThumbnailGrid
 from .workers import ReportProgress, Worker
 
@@ -67,6 +74,7 @@ class MainWindow(QMainWindow):
         self.card_detector = card_detector
         self.thumbnail_factory = thumbnail_factory
         self.db = Database(db_path)
+        apply_exiftool_setting(self.db)
         self.plan: ImportPlan | None = None
         self.camera_folders: list[str] = []
         self._worker: Worker | None = None
@@ -106,6 +114,9 @@ class MainWindow(QMainWindow):
         row.addWidget(self.library_label, stretch=1)
         row.addWidget(self.change_root_button)
         row.addWidget(self.rescan_button)
+        self.settings_button = QPushButton("Settings…")
+        self.settings_button.clicked.connect(self.open_settings)
+        row.addWidget(self.settings_button)
         return box
 
     def _build_target_box(self) -> QGroupBox:
@@ -254,6 +265,29 @@ class MainWindow(QMainWindow):
             self._refresh_library_label()
             self._refresh_target_preview()
 
+    def open_settings(self) -> None:
+        if self._exec_settings():
+            self._apply_settings()
+
+    def _exec_settings(self) -> bool:
+        return SettingsDialog(self.db, self).exec() == SettingsDialog.DialogCode.Accepted
+
+    def _apply_settings(self) -> None:
+        apply_exiftool_setting(self.db)
+        self._refresh_library_label()
+        self._refresh_target_preview()
+        if self.plan is not None:
+            # Camera names and folders may have changed.
+            cameras = self.db.cameras()
+            for group in self.plan.groups:
+                camera = cameras.get((group.camera.make, group.camera.model))
+                if camera is not None:
+                    group.camera, group.registered = camera, True
+                elif group.registered:
+                    group.camera = Camera.default_for(group.camera.make, group.camera.model)
+                    group.registered = False
+            self._refresh_plan_view()
+
     def rescan_library(self) -> None:
         root = photos_root(self.db)
         db_path, reader_factory = self.db_path, self.reader_factory
@@ -283,7 +317,9 @@ class MainWindow(QMainWindow):
             description = self.description_edit.text().strip()
             if not description:
                 return None
-            return new_import_folder(photos_root(self.db), description, date.today())
+            return new_import_folder(
+                photos_root(self.db), description, date.today(), date_format(self.db)
+            )
         text = self.existing_edit.text().strip()
         return Path(text) if text else None
 
@@ -317,6 +353,11 @@ class MainWindow(QMainWindow):
 
     def on_card_inserted(self, card: Path) -> None:
         """A card was inserted (or was already in when the app started): look at it."""
+        if not find_on_insert(self.db):
+            if not self._busy:
+                self.source_edit.setText(str(card))
+                self.status_label.setText(f"Card inserted: {card}. Click Find new photos.")
+            return
         if self._busy:
             self._pending_card = card
             self.status_label.setText(f"Card inserted: {card}. Checking it when this finishes…")
@@ -572,6 +613,7 @@ class MainWindow(QMainWindow):
         for widget in (
             self.change_root_button,
             self.rescan_button,
+            self.settings_button,
             self.find_button,
             self.detect_button,
             self.browse_source_button,

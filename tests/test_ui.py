@@ -322,3 +322,69 @@ def test_thumbnail_grid_views_follow_groups_and_cameras(qtbot, window, card, lib
     window.include_older_check.setChecked(False)
     assert window.plan_tree.selectedItems()[0].text(0).startswith("RICOH")
     assert grid.shots() == []
+
+
+def test_settings_dialog_saves_general_settings_and_cameras(qtbot, window, library):
+    from photoimporter.core.config import format_date
+    from photoimporter.core.models import Camera
+    from photoimporter.ui.settings_dialog import SettingsDialog
+
+    db = window.db
+    db.save_camera(Camera("RICOH", "GR III", "Ricoh", "ricoh"))
+    db.save_camera(Camera("Canon", "EOS 6D Mark II", "6D", "canon 6d"))
+    dialog = SettingsDialog(db)
+    qtbot.addWidget(dialog)
+    ok = dialog.buttons.button(dialog.buttons.StandardButton.Ok)
+
+    dialog.date_combo.setCurrentText("YYYY.MM")
+    assert not ok.isEnabled()
+    dialog.date_combo.setCurrentText("M.D.YYYY")
+    assert ok.isEnabled()
+    today = format_date(date.today(), "M.D.YYYY")
+    assert dialog.date_preview.text().endswith(f"{today} Description")
+    dialog.find_on_insert_check.setChecked(False)
+
+    table = dialog.camera_table
+    assert [table.item(r, 1).text() for r in range(table.rowCount())] == ["6D", "Ricoh"]
+    table.item(1, 2).setText("  ricoh gr3 ")
+    table.item(1, 3).setText("")
+    table.selectRow(0)
+    dialog.forget_button.click()
+    dialog.accept()
+
+    assert db.get_setting("date_format") == "M.D.YYYY"
+    assert db.get_setting("find_on_insert") == "0"
+    assert db.cameras() == {
+        ("RICOH", "GR III"): Camera("RICOH", "GR III", "Ricoh", "ricoh gr3", "", "raw")
+    }
+
+
+def test_settings_changes_apply_to_the_open_plan(qtbot, window, card, monkeypatch):
+    from photoimporter.core.models import Camera
+
+    window.source_edit.setText(str(card))
+    with qtbot.waitSignal(window.plan_ready, timeout=10_000):
+        window.find_button.click()
+    assert window.plan_tree.topLevelItem(0).text(0) == "RICOH GR III (new camera)"
+
+    def edit_settings():
+        camera = window.plan.groups[0].camera
+        window.db.save_camera(Camera(camera.make, camera.model, "GR", "gr"))
+        window.db.set_setting("date_format", "YYYY-MM-DD")
+        return True
+
+    monkeypatch.setattr(window, "_exec_settings", edit_settings)
+    window.description_edit.setText("Walk")
+    window.open_settings()
+
+    assert window.plan_tree.topLevelItem(0).text(0) == "GR"
+    assert window.plan_tree.topLevelItem(0).text(1).startswith(f"gr{os.sep}")
+    assert window.target_preview.text().endswith(f"{date.today():%Y-%m-%d} Walk")
+
+
+def test_card_insert_can_just_fill_in_the_source(qtbot, window, card):
+    window.db.set_setting("find_on_insert", "0")
+    window.cards = [card]
+    qtbot.waitUntil(lambda: window.source_edit.text() == str(card), timeout=5_000)
+    assert window.plan is None
+    assert window.status_label.text() == f"Card inserted: {card}. Click Find new photos."
