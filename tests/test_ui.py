@@ -14,6 +14,7 @@ from photoimporter.core.db import Database  # noqa: E402
 from photoimporter.core.planner import STATUSES, import_breakdown  # noqa: E402
 from photoimporter.core.thumbnails import Thumbnail  # noqa: E402
 from photoimporter.ui.main_window import MainWindow  # noqa: E402
+from photoimporter.ui.thumbnail_grid import CHOSEN_ROLE, is_header  # noqa: E402
 
 
 class FakeThumbnails:
@@ -442,10 +443,73 @@ def test_tiles_resize_with_the_window(qtbot, window, card):
         qtbot.wait(100)  # the refit waits for resizing to pause
         viewport = grid.list.viewport().width()
         columns = grid.columns_for(viewport)
-        tops = [grid.list.visualItemRect(grid.list.item(i)).top() for i in range(grid.list.count())]
-        assert tops[:columns] == [tops[0]] * min(columns, len(tops))  # Qt lays out that many
-        assert viewport - grid.list.gridSize().width() * columns <= 4 + columns  # no gap
+        # The day with the most photos: its rows hold `columns` tiles each.
+        biggest = max(grid.headers(), key=lambda h: len(h.data(Qt.ItemDataRole.UserRole).shots))
+        names = {s.name for s in biggest.data(Qt.ItemDataRole.UserRole).shots}
+        day = [i for i in grid.tiles() if i.data(Qt.ItemDataRole.UserRole).name in names]
+        assert len(day) > columns
+        tops = [grid.list.visualItemRect(item).top() for item in day]
+        assert tops[:columns] == [tops[0]] * columns  # Qt lays out that many
+        assert tops[columns] > tops[0]
+        assert viewport - grid.cell_size.width() * columns <= 4 + columns  # no gap
+        header = grid.list.visualItemRect(grid.headers()[0])
+        assert header.width() >= viewport - 4 and header.top() < tops[0]  # spans the row
         assert abs(grid.thumb_size.width() - 160) <= 160 * 0.2  # close to Medium
+
+
+def test_photos_are_grouped_under_day_headers(qtbot, window, card, reader):
+    from conftest import RICOH, make_file
+
+    from photoimporter.core.models import PhotoMeta
+
+    for name, when in (
+        ("R0000010.JPG", "2026:11:09 08:00:00"),
+        ("R0000011.JPG", "2026:11:09 09:00:00"),
+    ):
+        make_file(card / "DCIM" / "100RICOH" / name, b"jpg")
+        reader.metas[name.lower()] = PhotoMeta(**RICOH, capture_time=when)
+    window.source_edit.setText(str(card))
+    with qtbot.waitSignal(window.plan_ready, timeout=10_000):
+        window.find_button.click()
+    grid = window.grid
+
+    def layout():
+        return [
+            f"# {d.title}: {d.counts}" if is_header(i) else d.name
+            for i in grid.list.findItems("", Qt.MatchFlag.MatchContains)
+            for d in [i.data(Qt.ItemDataRole.UserRole)]
+        ]
+
+    assert layout() == [  # newest day first, each day's photos under it
+        "# Monday, November 9, 2026: 2 photos · 2 selected",
+        "R0000011",
+        "R0000010",
+        "# Monday, November 2, 2026: 2 photos · 2 selected",
+        "R0000002",
+        "R0000001",
+    ]
+    assert grid.count_label.text() == "4 pictures, 4 selected"  # headers aren't pictures
+
+    nov9 = grid.header_for("Monday, November 9, 2026")
+    mouse_click(qtbot, grid, nov9)  # all selected: deselects the day
+    assert chosen(grid) == {
+        "R0000011": "off",
+        "R0000010": "off",
+        "R0000002": "on",
+        "R0000001": "on",
+    }
+    assert nov9.data(Qt.ItemDataRole.UserRole).counts == "2 photos · 0 selected"
+    assert window.import_button.text() == "Import 2 photos (3 files)"
+
+    mouse_click(qtbot, grid, "R0000011")  # part of the day: the header shows a dash
+    assert nov9.data(CHOSEN_ROLE) == "part"
+    mouse_click(qtbot, grid, nov9)  # partly selected: selects the rest
+    assert nov9.data(CHOSEN_ROLE) == "on"
+
+    grid.select_none_button.click()
+    mouse_click(qtbot, grid, "R0000011")
+    mouse_click(qtbot, grid, "R0000002", Qt.KeyboardModifier.ShiftModifier)  # across a header
+    assert chosen(grid) == {"R0000011": "on", "R0000010": "on", "R0000002": "on", "R0000001": "off"}
 
 
 def find_with_sony_and_one_imported(qtbot, window, card, library):
@@ -469,16 +533,15 @@ def view(grid, label):
 
 
 def chosen(grid):
-    from photoimporter.ui.thumbnail_grid import CHOSEN_ROLE
 
     return {
-        grid.list.item(i).data(Qt.ItemDataRole.UserRole).name: grid.list.item(i).data(CHOSEN_ROLE)
-        for i in range(grid.list.count())
+        item.data(Qt.ItemDataRole.UserRole).name: item.data(CHOSEN_ROLE) for item in grid.tiles()
     }
 
 
 def mouse_click(qtbot, grid, name, modifier=None):
-    rect = grid.list.visualItemRect(grid.item_for(name))
+    item = grid.item_for(name) if isinstance(name, str) else name
+    rect = grid.list.visualItemRect(item)
     qtbot.mouseClick(
         grid.list.viewport(),
         Qt.MouseButton.LeftButton,

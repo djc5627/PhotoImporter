@@ -56,7 +56,8 @@ Insert an SD card and the app finds its new photos on its own. Photos already in
 and photos you deleted from it (e.g. in Capture One), are skipped; use the *Include* menu to
 import deleted ones anyway. Photos deleted after your newest remaining photo from a camera (e.g. a
 whole import folder you just deleted) have their own tick, separate from older culls.
-Thumbnails of every photo on the card are shown newest first, each labelled New, Already
+Thumbnails of every photo on the card are shown newest first, grouped by day (click a day's
+header to select all of it), each labelled New, Already
 imported, Deleted and so on. Click photos (Shift-click for a range) to choose exactly what's imported, or select some and
 use *Delete…* to remove them from the SD card (via the Windows Recycle Bin); use *Show*
 to look at one group, *Size* (or Ctrl+scroll) to make thumbnails bigger or smaller, and the
