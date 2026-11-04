@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QGridLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -23,6 +22,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QRadioButton,
+    QSizePolicy,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -99,9 +99,11 @@ class MainWindow(QMainWindow):
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.addWidget(self._build_update_bar())
-        layout.addWidget(self._build_library_box())
-        layout.addWidget(self._build_target_box())
-        layout.addWidget(self._build_source_box())
+        layout.addLayout(self._build_setup())
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setFrameShadow(QFrame.Shadow.Sunken)
+        layout.addWidget(line)
         layout.addWidget(self._build_plan_box(), stretch=1)
         layout.addLayout(self._build_footer())
         self.setCentralWidget(central)
@@ -147,25 +149,20 @@ class MainWindow(QMainWindow):
         self.available_update: Release | None = None
         return self.update_bar
 
-    def _build_library_box(self) -> QGroupBox:
-        box = QGroupBox("Photo library")
-        row = QHBoxLayout(box)
+    def _build_setup(self) -> QGridLayout:
+        """Library, import folder and card, one compact row each."""
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(6)
+
         self.library_label = QLabel()
         self.change_root_button = QPushButton("Change…")
         self.change_root_button.clicked.connect(self.choose_photos_root)
         self.rescan_button = QPushButton("Rescan library")
         self.rescan_button.clicked.connect(self.rescan_library)
-        row.addWidget(self.library_label, stretch=1)
-        row.addWidget(self.change_root_button)
-        row.addWidget(self.rescan_button)
         self.settings_button = QPushButton("Settings…")
         self.settings_button.clicked.connect(self.open_settings)
-        row.addWidget(self.settings_button)
-        return box
 
-    def _build_target_box(self) -> QGroupBox:
-        box = QGroupBox("Import into")
-        grid = QGridLayout(box)
         self.new_radio = QRadioButton("New folder")
         self.existing_radio = QRadioButton("Existing folder")
         self.new_radio.setChecked(True)
@@ -173,30 +170,19 @@ class MainWindow(QMainWindow):
         self.description_edit.setPlaceholderText("Description, e.g. Halloween Hike")
         self.target_preview = QLabel()
         self.target_preview.setStyleSheet("color: gray")
+        # Ignored width: a long path is cut off instead of squeezing the description box.
+        self.target_preview.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.existing_edit = QLineEdit()
         self.existing_edit.setPlaceholderText("Choose a folder in your library")
         self.browse_target_button = QPushButton("Browse…")
         self.browse_target_button.clicked.connect(self.choose_existing_target)
-
-        grid.addWidget(self.new_radio, 0, 0)
-        grid.addWidget(self.description_edit, 0, 1, 1, 2)
-        grid.addWidget(self.target_preview, 1, 1, 1, 2)
-        grid.addWidget(self.existing_radio, 2, 0)
-        grid.addWidget(self.existing_edit, 2, 1)
-        grid.addWidget(self.browse_target_button, 2, 2)
-        grid.setColumnStretch(1, 1)
-
         for signal in (
             self.new_radio.toggled,
             self.description_edit.textChanged,
             self.existing_edit.textChanged,
         ):
             signal.connect(self._refresh_target_preview)
-        return box
 
-    def _build_source_box(self) -> QGroupBox:
-        box = QGroupBox("Import from")
-        row = QHBoxLayout(box)
         self.source_edit = QLineEdit()
         self.source_edit.setPlaceholderText("SD card or folder")
         self.browse_source_button = QPushButton("Browse…")
@@ -206,15 +192,47 @@ class MainWindow(QMainWindow):
         self.find_button = QPushButton("Find new photos")
         self.find_button.setDefault(True)
         self.find_button.clicked.connect(self.find_new_photos)
-        row.addWidget(self.source_edit, stretch=1)
-        row.addWidget(self.browse_source_button)
-        row.addWidget(self.detect_button)
-        row.addWidget(self.find_button)
-        return box
 
-    def _build_plan_box(self) -> QGroupBox:
-        box = QGroupBox("New photos")
+        def caption(text: str) -> QLabel:
+            label = QLabel(text)
+            label.setStyleSheet("font-weight: 600")
+            return label
+
+        def buttons(*widgets: QWidget) -> QHBoxLayout:
+            row = QHBoxLayout()
+            row.setSpacing(6)
+            row.addStretch(1)
+            for widget in widgets:
+                row.addWidget(widget)
+            return row
+
+        grid.addWidget(caption("Library"), 0, 0)
+        grid.addWidget(self.library_label, 0, 1, 1, 2)
+        grid.addLayout(
+            buttons(self.change_root_button, self.rescan_button, self.settings_button), 0, 3
+        )
+        grid.addWidget(caption("Import into"), 1, 0)
+        grid.addWidget(self.new_radio, 1, 1)
+        new_row = QHBoxLayout()
+        new_row.setSpacing(10)
+        new_row.addWidget(self.description_edit, stretch=1)
+        new_row.addWidget(self.target_preview, stretch=1)
+        grid.addLayout(new_row, 1, 2, 1, 2)
+        grid.addWidget(self.existing_radio, 2, 1)
+        grid.addWidget(self.existing_edit, 2, 2)
+        grid.addLayout(buttons(self.browse_target_button), 2, 3)
+        grid.addWidget(caption("Import from"), 3, 0)
+        grid.addWidget(self.source_edit, 3, 1, 1, 2)
+        grid.addLayout(
+            buttons(self.browse_source_button, self.detect_button, self.find_button), 3, 3
+        )
+        grid.setColumnStretch(2, 1)
+        return grid
+
+    def _build_plan_box(self) -> QWidget:
+        box = QWidget()
         layout = QVBoxLayout(box)
+        layout.setContentsMargins(0, 0, 0, 0)
         self.grid = ThumbnailGrid(self.thumbnail_factory)
         self.grid.selection_changed.connect(self._refresh_selection_view)
         self.grid.delete_requested.connect(self.delete_selected)
@@ -399,6 +417,7 @@ class MainWindow(QMainWindow):
         self.browse_target_button.setEnabled(not is_new)
         target = self.target_dir() if is_new else None
         self.target_preview.setText(str(target) if target else "")
+        self.target_preview.setToolTip(f"This import will create {target}" if target else "")
 
     def choose_existing_target(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Import folder", str(photos_root(self.db)))
