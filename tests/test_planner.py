@@ -45,3 +45,76 @@ def test_source_without_dcim_is_scanned_directly(tmp_path, reader):
     photos = scan_source(folder, reader)
 
     assert [p.filename for p in photos] == ["R0000002.JPG"]
+
+
+def _by_name(photos):
+    return sorted(p.filename for p in photos)
+
+
+def test_photos_deleted_since_import_are_skipped_unless_included(tmp_path, card, reader):
+    photos = scan_source(card, reader)
+    jpg = next(p for p in photos if p.filename == "R0000001.JPG")
+
+    plan = build_plan(card, tmp_path / "t", photos, set(), {}, deleted_keys={jpg.key})
+
+    assert (plan.new_count, plan.deleted_count, plan.copy_count) == (2, 1, 2)
+    assert _by_name(i.photo for i in plan.items) == ["R0000001.DNG", "R0000002.JPG"]
+    assert plan.summary() == ("2 new photos, 0 already imported, 1 deleted since import (skipped).")
+
+    plan.include_deleted = True
+    assert plan.copy_count == 3
+    assert "1 deleted since import (included)" in plan.summary()
+
+
+def test_deleted_photos_newer_than_library_are_recent(tmp_path, card, reader):
+    photos = scan_source(card, reader)
+    deleted = {p.key for p in photos}
+    present = {"RICOH GR III": "2026:11:02 10:00:00"}
+
+    plan = build_plan(
+        card, tmp_path / "t", photos, set(), {}, deleted, newest_present_by_model=present
+    )
+
+    group = plan.groups[0]
+    assert _by_name(group.recent_deleted) == ["R0000002.JPG"]  # 10:05
+    assert _by_name(group.deleted) == ["R0000001.DNG", "R0000001.JPG"]  # 10:00, not newer
+    plan.include_recent_deleted = True
+    assert _by_name(i.photo for i in plan.items) == ["R0000002.JPG"]
+    assert "1 recently deleted (included), 2 deleted since import (skipped)" in plan.summary()
+
+
+def test_photo_still_in_library_wins_over_deleted_history(tmp_path, card, reader):
+    photos = scan_source(card, reader)
+    keys = {p.key for p in photos}
+
+    plan = build_plan(card, tmp_path / "t", photos, keys, {}, deleted_keys=keys)
+
+    assert (plan.already_count, plan.deleted_count) == (3, 0)
+
+
+def test_photos_older_than_newest_library_photo_are_probably_deleted(tmp_path, card, reader):
+    make_file(card / "DCIM" / "100RICOH" / "R0000009.JPG", b"no-exif")
+    photos = scan_source(card, reader)
+    # The library's newest Ricoh shot is between R0000001 (10:00) and R0000002 (10:05).
+    newest = {"RICOH GR III": "2026:11:02 10:03:00"}
+
+    plan = build_plan(card, tmp_path / "t", photos, set(), {}, newest_by_model=newest)
+
+    group = plan.groups[0]
+    assert _by_name(group.older) == ["R0000001.DNG", "R0000001.JPG"]
+    assert _by_name(plan.groups[1].new) == ["R0000009.JPG"]  # no capture time: can't tell
+    assert _by_name(group.new) == ["R0000002.JPG"]
+    assert plan.copy_count == 2
+
+    plan.include_older = True
+    assert plan.copy_count == 4
+
+
+def test_older_rule_is_per_camera(tmp_path, card, reader):
+    photos = scan_source(card, reader)
+
+    plan = build_plan(
+        card, tmp_path / "t", photos, set(), {}, newest_by_model={"DSC-RX100M7": "2030:01:01"}
+    )
+
+    assert (plan.new_count, plan.older_count) == (3, 0)

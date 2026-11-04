@@ -40,7 +40,14 @@ class ScanResult:
 def scan_library(
     db: Database, root: Path, reader: MetadataReader, progress: Progress | None = None
 ) -> ScanResult:
-    """Bring the index in sync with `root`, reading metadata only for new or changed files."""
+    """Bring the index in sync with `root`, reading metadata only for new or changed files.
+
+    Files that have disappeared are remembered as deleted rather than forgotten, so photos
+    removed from the library (e.g. in Capture One) are not offered for import again.
+    """
+    if not root.is_dir():
+        # Without this, an unplugged drive would look like every photo had been deleted.
+        raise FileNotFoundError(f"Photo library folder not found: {root}")
     prefix = norm_path(root).rstrip("\\/") + os.sep
     known = {p: st for p, st in db.file_stats().items() if p.startswith(prefix)}
     result = ScanResult()
@@ -63,7 +70,7 @@ def scan_library(
         pending.append((Path(path), *current))
 
     removed = [p for p in known if p not in seen]
-    db.delete_files(removed)
+    db.mark_deleted(removed)
     result.removed = len(removed)
 
     metas = read_metadata(reader, [p for p, _, _ in pending], progress)

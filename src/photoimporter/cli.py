@@ -5,7 +5,9 @@ import sys
 from datetime import date
 from pathlib import Path
 
+from .core.cameras import LibraryLayout, apply_camera_suggestions
 from .core.cards import detect_cards, scan_source
+from .core.config import new_import_folder, photos_root
 from .core.copier import execute_plan
 from .core.db import Database, default_db_path
 from .core.exif import ExifToolError, ExifToolReader, MetadataReader
@@ -13,19 +15,12 @@ from .core.indexer import scan_library
 from .core.models import Camera
 from .core.planner import ImportPlan, build_plan
 
-DATE_FORMAT = "%Y.%m.%d"
-
 
 def _progress(label: str):
     def report(done: int, total: int) -> None:
         print(f"\r{label}: {done}/{total}", end="" if done < total else "\n", file=sys.stderr)
 
     return report
-
-
-def photos_root(db: Database) -> Path:
-    stored = db.get_setting("photos_root")
-    return Path(stored) if stored else Path.home() / "Pictures"
 
 
 def _resolve_source(arg: Path | None) -> Path:
@@ -44,7 +39,7 @@ def _resolve_source(arg: Path | None) -> Path:
 def _resolve_target(args: argparse.Namespace, root: Path) -> Path:
     if args.target is not None:
         return args.target
-    return root / f"{date.today().strftime(DATE_FORMAT)} {args.new.strip()}"
+    return new_import_folder(root, args.new, date.today())
 
 
 def _print_plan(plan: ImportPlan) -> None:
@@ -55,15 +50,29 @@ def _print_plan(plan: ImportPlan) -> None:
         kinds = ", ".join(f"{n} {kind}" for kind, n in sorted(group.new_by_kind().items()))
         label = f"{cam.nickname} ({' '.join(filter(None, (cam.make, cam.model))) or 'no EXIF'})"
         flag = "" if group.registered else " [new camera]"
-        print(
+        line = (
             f"  {label}{flag}: {len(group.new)} new"
             + (f" ({kinds})" if kinds else "")
             + f", {len(group.already)} already imported"
         )
-        if group.new:
-            subdirs = sorted({cam.subdir_for(p.kind) for p in group.new})
+        if group.recent_deleted:
+            line += f", {len(group.recent_deleted)} recently deleted"
+        if group.deleted:
+            line += f", {len(group.deleted)} deleted since import"
+        if group.older:
+            line += f", {len(group.older)} probably deleted earlier"
+        print(line)
+        to_copy = plan.to_copy(group)
+        if to_copy:
+            subdirs = sorted({cam.subdir_for(p.kind) for p in to_copy})
             print("    -> " + ", ".join(str(Path(cam.folder_name) / d) for d in subdirs))
-    print(f"Total: {plan.new_count} new, {plan.already_count} already imported")
+    print(plan.summary())
+    if plan.recent_deleted_count and not plan.include_recent_deleted:
+        print("  (use --include-recent-deleted to import recently deleted photos)")
+    if plan.deleted_count and not plan.include_deleted:
+        print("  (use --include-deleted to import photos deleted since import)")
+    if plan.older_count and not plan.include_older:
+        print("  (use --include-older to import photos probably deleted earlier)")
 
 
 def _make_plan(args: argparse.Namespace, db: Database, reader: MetadataReader) -> ImportPlan:
@@ -80,7 +89,21 @@ def _make_plan(args: argparse.Namespace, db: Database, reader: MetadataReader) -
         )
     source = _resolve_source(args.source)
     photos = scan_source(source, reader, _progress("Reading card"))
-    return build_plan(source, _resolve_target(args, root), photos, db.existing_keys(), db.cameras())
+    plan = build_plan(
+        source,
+        _resolve_target(args, root),
+        photos,
+        db.existing_keys(),
+        db.cameras(),
+        db.deleted_keys(),
+        db.newest_capture_by_model(),
+        db.newest_capture_by_model(include_deleted=False),
+    )
+    apply_camera_suggestions(plan, LibraryLayout.from_db(db, root))
+    plan.include_recent_deleted = args.include_recent_deleted
+    plan.include_deleted = args.include_deleted
+    plan.include_older = args.include_older
+    return plan
 
 
 def cmd_config(args, db, reader_factory) -> int:
@@ -92,6 +115,10 @@ def cmd_config(args, db, reader_factory) -> int:
 
 def cmd_scan(args, db, reader_factory) -> int:
     root = photos_root(db)
+    if not root.is_dir():
+        raise SystemExit(
+            f"Photos folder not found: {root}. Set it with: photoimporter config --root PATH"
+        )
     result = scan_library(db, root, reader_factory(), _progress("Indexing library"))
     print(
         f"{root}: {result.added} added, {result.updated} updated, {result.removed} removed, "
@@ -140,7 +167,7 @@ def cmd_plan(args, db, reader_factory) -> int:
 def cmd_import(args, db, reader_factory) -> int:
     plan = _make_plan(args, db, reader_factory())
     _print_plan(plan)
-    if plan.new_count == 0:
+    if plan.copy_count == 0:
         print("Nothing new to import.")
         return 0
     if not args.yes and input("Copy these files? [y/N] ").strip().lower() != "y":
@@ -204,6 +231,21 @@ def build_parser() -> argparse.ArgumentParser:
             "--new", metavar="DESCRIPTION", help="new folder named 'YYYY.MM.DD DESCRIPTION'"
         )
         p.add_argument("--no-scan", action="store_true", help="skip re-indexing the photos folder")
+        p.add_argument(
+            "--include-recent-deleted",
+            action="store_true",
+            help="also import deleted photos newer than the newest library photo from the camera",
+        )
+        p.add_argument(
+            "--include-deleted",
+            action="store_true",
+            help="also import photos that were imported before and later deleted",
+        )
+        p.add_argument(
+            "--include-older",
+            action="store_true",
+            help="also import photos older than the newest library photo from the same camera",
+        )
         if name == "import":
             p.add_argument("-y", "--yes", action="store_true", help="don't ask for confirmation")
         p.set_defaults(func=func)

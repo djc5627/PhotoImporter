@@ -16,10 +16,25 @@ uv run photoimporter scan                        # index existing photos (first 
 
 ## Use
 
+Desktop app:
+
+```
+uv run photoimporter-gui
+```
+
+Insert an SD card and the app finds its new photos on its own. Photos already in your library,
+and photos you deleted from it (e.g. in Capture One), are skipped; tick *Include* to import
+deleted ones anyway. Photos deleted after your newest remaining photo from a camera (e.g. a
+whole import folder you just deleted) have their own tick, separate from older culls. The first time a camera's photos are imported, the app asks which folders
+to use, pre-filled from where that camera's photos already are in your library.
+
+Command line:
+
 ```
 uv run photoimporter plan E:\ --new "Halloween Hike"       # dry run
 uv run photoimporter import E:\ --new "Halloween Hike"     # copy new photos
 uv run photoimporter import --target "D:\Photos\2026.11.02 Halloween Hike"   # next card, same folder
+uv run photoimporter import E:\ --new "Trip" --include-deleted   # also re-import deleted photos
 uv run photoimporter cameras
 uv run photoimporter camera-set --make "SONY" --model "DSC-RX100M7" --nickname "RX100" --folder "sony rx100"
 ```

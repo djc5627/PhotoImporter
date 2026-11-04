@@ -81,3 +81,49 @@ def test_counter_reset_photo_is_imported(db, card, library, reader):
     plan = plan_for(db, card, library / "second", reader)
 
     assert [p.filename for g in plan.groups for p in g.new] == ["R0000002.JPG"]
+
+
+def replan_with_history(db, card, library, reader):
+    return build_plan(
+        card,
+        library / "later",
+        scan_source(card, reader),
+        db.existing_keys(),
+        db.cameras(),
+        db.deleted_keys(),
+        db.newest_capture_by_model(),
+        db.newest_capture_by_model(include_deleted=False),
+    )
+
+
+def test_deleted_photos_are_split_by_newest_photo_still_in_library(db, card, library, reader):
+    target = library / "2026.11.02 Hike"
+    execute_plan(plan_for(db, card, target, reader), db)
+    # A cull in Capture One. The newest photo kept is R0000001.DNG (10:00), so the deleted
+    # R0000002.JPG (10:05) is recent, and R0000001.JPG (10:00, not newer) is an older deletion.
+    (target / "ricoh gr iii" / "jpg" / "R0000001.JPG").unlink()
+    (target / "ricoh gr iii" / "jpg" / "R0000002.JPG").unlink()
+    scan_library(db, library, reader)
+
+    plan = replan_with_history(db, card, library, reader)
+
+    group = plan.groups[0]
+    assert [p.filename for p in group.recent_deleted] == ["R0000002.JPG"]
+    assert [p.filename for p in group.deleted] == ["R0000001.JPG"]
+    assert (plan.new_count, plan.already_count) == (0, 1)
+    assert plan.items == []
+
+
+def test_deleting_a_whole_import_folder_makes_all_its_photos_recent(db, card, library, reader):
+    target = library / "2026.11.02 Hike"
+    execute_plan(plan_for(db, card, target, reader), db)
+    for photo in sorted(target.rglob("*"), reverse=True):
+        photo.unlink() if photo.is_file() else photo.rmdir()
+    target.rmdir()
+    scan_library(db, library, reader)
+
+    plan = replan_with_history(db, card, library, reader)
+
+    assert (plan.recent_deleted_count, plan.deleted_count, plan.new_count) == (3, 0, 0)
+    plan.include_recent_deleted = True
+    assert plan.copy_count == 3

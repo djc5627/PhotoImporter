@@ -9,7 +9,7 @@ Decisions so far:
 - **Dedup by capture time + filename**, backed by a scan of the Pictures library cached in SQLite.
 - **Auto-detect** inserted cards.
 - **Summary + thumbnail preview** before copying.
-- Capture One integration is out of scope. Capture One never moves files.
+- Capture One integration is out of scope. Capture One does not rename or move files, but it **does delete them** (e.g. during a cleanup). Photos deleted from the library must not be offered for import again (see *Deleted photos*).
 
 ## Tech stack
 | Concern | Choice | Why |
@@ -38,13 +38,26 @@ Decisions so far:
 **Library index:**
 - Walk the photos root, which defaults to `%USERPROFILE%\Pictures` and is configurable.
 - Only photo extensions are indexed.
-- Change detection is per file by `(path, size, mtime)`, read via `os.scandir`. Only new or changed files are read by ExifTool. Rows for files that no longer exist are pruned.
+- Change detection is per file by `(path, size, mtime)`, read via `os.scandir`. Only new or changed files are read by ExifTool. Rows for files that no longer exist are moved to the deleted-photos history, not forgotten.
+- If the photos root itself is missing (e.g. the drive is unplugged), the scan stops with an error instead of treating every photo as deleted.
 - The first scan is slow, so it runs on a worker thread with a progress bar.
 
 **Camera registry:**
 - Keyed on EXIF `Make` + `Model`.
 - Stores a nickname, the camera folder name (e.g. `ricoh`), and the JPG and raw subfolder names (default `jpg`/`raw`).
-- When an unknown camera is found, a dialog asks for these, pre-filled from EXIF.
+- When an unregistered camera has photos to import, a dialog asks for these on Import. They are pre-filled from the library: the camera folder and subfolders most often used by that camera model's photos in `<date>/<camera>/<subfolder>/<photo>` paths, falling back to the lowercase EXIF model and `jpg`/`raw`. This also matches cameras that were used before the app existed. The CLI uses the same suggestions without asking.
+
+**Deleted photos:**
+Each card photo falls into one of five groups:
+1. **New:** imported.
+2. **Already imported:** in the library now. Skipped.
+3. **Recently deleted:** in the deleted-photos history, and its capture time is newer than the newest photo from the same camera model still in the library (or that camera has no photos left). Typically a just-deleted import folder. Kept apart from group 4 so it can be restored without bringing back every older cull. Skipped unless the user ticks *Include*.
+4. **Deleted since import:** the rest of the deleted-photos history (imported or indexed once, then deleted). Photos without a capture time land here, never in group 3. Skipped unless the user ticks *Include*.
+5. **Probably deleted earlier:** in neither, but its capture time is older than the newest library photo (current or deleted) from the same camera model. Covers photos deleted before the history existed. Skipped unless the user ticks *Include*. Photos with no EXIF capture time are never put here.
+
+Each skipped group has its own *Include* tick, and the UI always shows their counts, so nothing is skipped silently. The CLI has `--include-recent-deleted`, `--include-deleted` and `--include-older`.
+
+Limitation of group 5: if a camera's photos are imported out of date order (e.g. two cards used in rotation, and the newer card imported first), never-imported photos on the older card land here. Ticking *Include* imports them.
 
 **Import target folder:**
 - Create a new `YYYY.MM.DD <description>` folder (today's date, editable), **or** pick an existing one for a second import the same day.
@@ -71,6 +84,7 @@ tests/             # pytest for core; fixtures with sample files per camera
 
 **DB tables:**
 - `files(path PK, size, mtime, filename, ext, model, capture_time, subsec)`, indexed on `(model, filename, capture_time)`
+- `deleted_files(path PK, filename, mtime, make, model, capture_time, subsec, deleted_at)`: files that disappeared from the library. Never pruned; a row is removed only if the file reappears at the same path.
 - `cameras(make, model, nickname, folder_name, jpg_dir, raw_dir)`
 - `settings(key, value)`
 - `imports(id, started_at, target_dir, source)` and `import_files(import_id, src, dest, status)`
@@ -83,7 +97,8 @@ tests/             # pytest for core; fixtures with sample files per camera
 **Threading:** EXIF reads, thumbnail generation and copies all run on `QThreadPool` workers and report back through signals. Nothing slow runs on the GUI thread.
 
 **Card detection:**
-- Poll drive letters every ~2 s and look for a `DCIM` folder. Check whether `os.listdrives()` (Python 3.12+) fits; otherwise iterate drive letters.
+- Poll drive letters every ~2 s and look for a `DCIM` folder, via `os.listdrives()` (Python 3.12+) or by iterating drive letters. Only removable and fixed local drives are checked: probing a disconnected network drive can block for seconds.
+- An inserted card (or one already in when the app starts) fills in the source and starts "Find new photos". If a task is running, the card is checked once it finishes. Removing the card clears its results.
 - Limitation: a camera connected by USB in MTP mode has no drive letter and won't be detected. SD card readers work.
 
 ## UI flow
@@ -101,13 +116,13 @@ tests/             # pytest for core; fixtures with sample files per camera
 5. **Settings:** photos root, date format, camera registry editor.
 
 ## Milestones
-1. **Core engine + CLI (no Qt):**
+1. **Core engine + CLI (no Qt):** Done.
    - Project setup (uv, ruff, pytest).
    - ExifTool wrapper, validated against a real file from each camera, to confirm tag names and the Canon format.
    - Indexer, planner, copier.
    - `photoimporter plan <card>` dry run, run against your real library to prove dedup.
-2. **Minimal PySide6 UI:** target folder picker, manual card browse, plan summary, import with progress.
-3. **Card auto-detect + camera registration dialog.**
+2. **Minimal PySide6 UI:** target folder picker, manual card browse, plan summary, import with progress. Done.
+3. **Card auto-detect + camera registration dialog.** Done.
 4. **Thumbnail preview grid.**
 5. **Settings screen + PyInstaller packaging** with a bundled `exiftool.exe`.
 
@@ -117,6 +132,7 @@ tests/             # pytest for core; fixtures with sample files per camera
   - Planner grouping.
   - Copier temp-file/rename handling, skip-on-exists, and resume after a simulated crash.
   - Indexer incremental rescan.
+- **Deleted-photo test:** import a card, delete one photo from the library, plan again. That photo must show as *deleted since import* and not be copied unless included.
 - **Idempotency acceptance test:** import a card, then plan again. The second run must show **0 new**.
 - **Legacy test:** run the planner against a card whose photos you previously copied by hand in Explorer. Those photos must be reported as already imported.
 - **Interrupt test:** kill a copy mid-run, restart it, and confirm it completes without duplicates or `.part` leftovers.
@@ -124,6 +140,8 @@ tests/             # pytest for core; fixtures with sample files per camera
 
 ## Assumptions (redirect if wrong)
 - The photos root defaults to `%USERPROFILE%\Pictures`.
-- The date format is `YYYY.MM.DD`, editable in settings.
+- The date format for new folders is `YYYY.MM.DD`, editable in settings.
+- Older folders use `M.D.YYYY Description` and must never be renamed or moved: Capture One links to those paths. The app only reads library folders, never changes or deletes anything in them, and can import into an old folder as an existing folder. Duplicate detection goes by EXIF and filename, not folder names.
+- Cards are formatted only when nearly full, not after each import, so a card usually holds photos from several earlier imports, including some later deleted from the library.
 - Camera folder names are lowercase nicknames (e.g. `ricoh`, `sony rx100`).
 - A single card only contains photos from one camera. Mixed cards still work, since grouping is per file.

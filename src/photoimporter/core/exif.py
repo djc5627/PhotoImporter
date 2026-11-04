@@ -35,6 +35,10 @@ def find_exiftool() -> str:
     found = shutil.which("exiftool")
     if found:
         return found
+    # winget's install location, for shells started before PATH was updated.
+    local = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "ExifTool" / "ExifTool.exe"
+    if local.is_file():
+        return str(local)
     raise ExifToolNotFound(
         "ExifTool was not found. Install it from https://exiftool.org and put exiftool.exe "
         "on PATH, or set PHOTOIMPORTER_EXIFTOOL to its full path."

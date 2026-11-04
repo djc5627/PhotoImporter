@@ -2,15 +2,28 @@ from __future__ import annotations
 
 import os
 import string
+import sys
 from pathlib import Path
 
 from .exif import MetadataReader, Progress, read_metadata
 from .indexer import iter_photo_files
 from .models import PhotoFile
 
+# GetDriveTypeW results worth checking for a card. Network drives are skipped because
+# probing a disconnected one can block for seconds, and this runs every couple of seconds.
+_DRIVE_REMOVABLE, _DRIVE_FIXED = 2, 3
+
+
+def _could_be_card(drive: str) -> bool:
+    if sys.platform != "win32":
+        return True
+    import ctypes
+
+    return ctypes.windll.kernel32.GetDriveTypeW(drive) in (_DRIVE_REMOVABLE, _DRIVE_FIXED)
+
 
 def detect_cards() -> list[Path]:
-    """Drives (other than the system drive) that have a DCIM folder."""
+    """Local drives (other than the system drive) that have a DCIM folder."""
     if hasattr(os, "listdrives"):
         drives = os.listdrives()
     else:
@@ -19,7 +32,7 @@ def detect_cards() -> list[Path]:
     cards = []
     for drive in drives:
         path = Path(drive)
-        if path.drive.upper() in ("A:", "B:", system_drive):
+        if path.drive.upper() in ("A:", "B:", system_drive) or not _could_be_card(drive):
             continue
         try:
             if (path / "DCIM").is_dir():
