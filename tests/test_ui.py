@@ -7,7 +7,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from conftest import copy_by_hand  # noqa: E402
-from PySide6.QtCore import QBuffer  # noqa: E402
+from PySide6.QtCore import QBuffer, Qt  # noqa: E402
 from PySide6.QtGui import QColor, QImage  # noqa: E402
 
 from photoimporter.core.db import Database  # noqa: E402
@@ -44,6 +44,8 @@ def window(qtbot, tmp_path, library, reader, monkeypatch):
         card_poll_ms=50,
         thumbnail_factory=FakeThumbnails,
         update_checker=None,
+        recycler_factory=lambda: lambda paths: win.recycle(paths),
+        deleted_staging=tmp_path / "deleted",
     )
     qtbot.addWidget(win)
     win.cards = []
@@ -54,8 +56,18 @@ def window(qtbot, tmp_path, library, reader, monkeypatch):
         return win.camera_answers.pop(0) if win.camera_answers else group.camera
 
     win.camera_answers = []
+    win.recycled = []
+
+    def recycle(paths):  # stands in for the Windows Recycle Bin
+        win.recycled.extend(p.name for p in paths)
+        for path in paths:
+            path.unlink()
+        return set()
+
+    win.recycle = recycle
     monkeypatch.setattr(win, "_ask_camera", ask_camera)
-    monkeypatch.setattr(win, "_confirm", lambda text: True)
+    win.confirmations = []
+    monkeypatch.setattr(win, "_confirm", lambda text: win.confirmations.append(text) or True)
     monkeypatch.setattr(win, "_notify", win.notices.append)
     monkeypatch.setattr(win, "_show_error", win.errors.append)
     return win
@@ -288,7 +300,7 @@ def test_thumbnail_grid_shows_raw_jpg_pairs_once(qtbot, window, card):
     grid = window.grid
     assert [(s.name, s.badge) for s in grid.shots()] == [("R0000002", ""), ("R0000001", "RAW+JPG")]
     assert grid.view_combo.currentText() == "All on card (3)"
-    assert grid.count_label.text() == "2 pictures, 2 ticked"
+    assert grid.count_label.text() == "2 pictures, 2 selected"
     assert window.import_button.text() == "Import 2 photos (3 files)"
     image = grid.cache[card / "DCIM" / "100RICOH" / "R0000001.JPG"]
     assert (image.width(), image.height()) == (160, 120)  # scaled up to the tile, 4:3 kept
@@ -308,40 +320,41 @@ def find_with_sony_and_one_imported(qtbot, window, card, library):
 
 
 def view(grid, label):
-    index = next(
-        i for i in range(grid.view_combo.count()) if grid.view_combo.itemText(i).startswith(label)
+    combo = grid.view_combo
+    combo.setCurrentIndex(
+        next(i for i in range(combo.count()) if combo.itemText(i).startswith(label))
     )
-    grid.view_combo.setCurrentIndex(index)
 
 
-def checked(grid):
-    from PySide6.QtCore import Qt
+def chosen(grid):
+    from photoimporter.ui.thumbnail_grid import CHOSEN_ROLE
 
-    names = {
-        Qt.CheckState.Checked: "on",
-        Qt.CheckState.Unchecked: "off",
-        Qt.CheckState.PartiallyChecked: "part",
+    return {
+        grid.list.item(i).data(Qt.ItemDataRole.UserRole).name: grid.list.item(i).data(CHOSEN_ROLE)
+        for i in range(grid.list.count())
     }
-    result = {}
-    for i in range(grid.list.count()):
-        item = grid.list.item(i)
-        checkable = bool(item.flags() & Qt.ItemFlag.ItemIsUserCheckable)
-        result[item.data(Qt.ItemDataRole.UserRole).name] = (
-            names[item.checkState()] if checkable else None
-        )
-    return result
+
+
+def mouse_click(qtbot, grid, name, modifier=None):
+    rect = grid.list.visualItemRect(grid.item_for(name))
+    qtbot.mouseClick(
+        grid.list.viewport(),
+        Qt.MouseButton.LeftButton,
+        modifier or Qt.KeyboardModifier.NoModifier,
+        rect.center(),
+    )
 
 
 def test_all_on_card_newest_first_with_statuses(qtbot, window, card, library):
     grid = find_with_sony_and_one_imported(qtbot, window, card, library)
 
     assert [s.name for s in grid.shots()] == ["DSC00001", "R0000002", "R0000001"]
-    assert checked(grid) == {"DSC00001": "on", "R0000002": None, "R0000001": "off"}
+    assert chosen(grid) == {"DSC00001": "on", "R0000002": "off", "R0000001": "off"}
     assert "R0000002.JPG (already imported)" in grid.item_for("R0000002").toolTip()
 
     view(grid, "Probably deleted")
     assert [s.name for s in grid.shots()] == ["R0000001"]
-    view(grid, "Ticked for import")
+    view(grid, "Selected for import")
     assert [s.name for s in grid.shots()] == ["DSC00001"]
 
     ricoh = next(
@@ -354,86 +367,124 @@ def test_all_on_card_newest_first_with_statuses(qtbot, window, card, library):
     assert [s.name for s in grid.shots()] == ["R0000002", "R0000001"]
 
 
-def test_ticking_single_photos(qtbot, window, card, library):
-    from PySide6.QtCore import Qt
-
+def test_clicking_toggles_photos(qtbot, window, card, library):
     grid = find_with_sony_and_one_imported(qtbot, window, card, library)
 
-    grid.item_for("R0000001").setCheckState(Qt.CheckState.Checked)  # as a click does
+    mouse_click(qtbot, grid, "R0000001")
     assert window.plan.include_older  # both files of the pair
     assert window.include_older_check.checkState() == Qt.CheckState.Checked
     assert window.import_button.text() == "Import 2 photos (3 files)"
 
-    grid.item_for("DSC00001").setCheckState(Qt.CheckState.Unchecked)
+    mouse_click(qtbot, grid, "DSC00001")
+    assert chosen(grid)["DSC00001"] == "off"
     assert window.status_label.text() == (
-        "1 new photo (0 ticked), 1 already imported, 2 probably deleted earlier (included)."
+        "1 new photo (0 selected), 1 already imported, 2 probably deleted earlier (included)."
     )
     assert window.import_button.text() == "Import 1 photo (2 files)"
 
-    grid.untick_all_button.click()
-    assert checked(grid) == {"DSC00001": "off", "R0000002": None, "R0000001": "off"}
+    grid.select_none_button.click()
+    assert set(chosen(grid).values()) == {"off"}
     assert not window.import_button.isEnabled()
-    grid.tick_all_button.click()
-    assert checked(grid) == {"DSC00001": "on", "R0000002": None, "R0000001": "on"}
+    grid.select_all_button.click()
+    assert set(chosen(grid).values()) == {"on"}
+    # The already-imported photo is selected (e.g. to delete it) but not imported again.
+    assert window.import_button.text() == "Import 2 photos (3 files)"
+    assert "to import again" not in window.status_label.text()
 
 
-def test_include_tick_shows_partial_and_ticks_the_whole_group(qtbot, window, card, library):
-    from conftest import make_file
-    from PySide6.QtCore import Qt
+def test_shift_click_selects_a_range(qtbot, window, card, library):
+    grid = find_with_sony_and_one_imported(qtbot, window, card, library)
+    grid.select_none_button.click()
 
-    make_file(card / "DCIM" / "100RICOH" / "R0000000.JPG", b"older")
-    window.source_edit.setText(str(card))
-    copy_by_hand(card / "DCIM" / "100RICOH" / "R0000002.JPG", library / "x" / "R0000002.JPG")
-    with qtbot.waitSignal(window.plan_ready, timeout=10_000):
-        window.find_button.click()
-    grid = window.grid
-    # R0000000 has no EXIF, so it's "new"; R0000001's pair is probably deleted.
+    mouse_click(qtbot, grid, "R0000001")  # anchor (bottom)
+    mouse_click(qtbot, grid, "DSC00001", Qt.KeyboardModifier.ShiftModifier)  # up to the top
+
+    assert chosen(grid) == {"DSC00001": "on", "R0000002": "on", "R0000001": "on"}
+
+
+def test_keyboard_and_double_click(qtbot, window, card, library, monkeypatch):
+    grid = find_with_sony_and_one_imported(qtbot, window, card, library)
+    opened = []
+    monkeypatch.setattr(grid, "_open", lambda item: opened.append(item.text()))
+
+    grid.list.setCurrentItem(grid.item_for("R0000002"))
+    qtbot.keyClick(grid.list, Qt.Key.Key_Space)
+    assert chosen(grid)["R0000002"] == "on"
+    qtbot.keyClick(grid.list, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+    assert set(chosen(grid).values()) == {"on"}
+
+    # A double-click opens the photo and leaves its selection as it was.
+    item, button = grid.item_for("DSC00001"), Qt.MouseButton.LeftButton
+    pos = grid.list.visualItemRect(item).center()
+    qtbot.mousePress(grid.list.viewport(), button, pos=pos)
+    qtbot.mouseRelease(grid.list.viewport(), button, pos=pos)
+    qtbot.mouseDClick(grid.list.viewport(), button, pos=pos)
+    qtbot.mouseRelease(grid.list.viewport(), button, pos=pos)
+    assert opened == ["DSC00001"]
+    assert chosen(grid)["DSC00001"] == "on"
+
+
+def test_include_tick_shows_partial_and_selects_the_whole_group(qtbot, window, card, library):
+    grid = find_with_sony_and_one_imported(qtbot, window, card, library)
     window.include_older_check.click()
-    assert checked(grid)["R0000001"] == "on"
+    assert chosen(grid)["R0000001"] == "on"
 
-    grid.item_for("R0000001").setCheckState(Qt.CheckState.Unchecked)
+    mouse_click(qtbot, grid, "R0000001")
     assert window.include_older_check.checkState() == Qt.CheckState.Unchecked
     window.plan.select([window.plan.photos("older")[0]])  # one file of the pair
     grid.refresh_checks()
     window._refresh_selection_view()
-    assert checked(grid)["R0000001"] == "part"
+    assert chosen(grid)["R0000001"] == "part"
     assert window.include_older_check.checkState() == Qt.CheckState.PartiallyChecked
     assert "2 probably deleted earlier (1 included)" in window.status_label.text()
 
 
-def test_space_flips_selected_tiles(qtbot, window, card, library):
-    from PySide6.QtCore import Qt
-
-    grid = find_with_sony_and_one_imported(qtbot, window, card, library)
-    grid.item_for("DSC00001").setSelected(True)
-    grid.item_for("R0000001").setSelected(True)
-    grid.item_for("R0000002").setSelected(True)  # not tickable: ignored
-
-    qtbot.keyClick(grid.list, Qt.Key.Key_Space)  # mixed -> all on
-    assert checked(grid) == {"DSC00001": "on", "R0000002": None, "R0000001": "on"}
-    qtbot.keyClick(grid.list, Qt.Key.Key_Space)  # all on -> all off
-    assert checked(grid) == {"DSC00001": "off", "R0000002": None, "R0000001": "off"}
-
-
-def test_already_imported_photos_need_permission_to_tick(qtbot, window, card, library):
-    from PySide6.QtCore import Qt
-
+def test_reimporting_needs_permission(qtbot, window, card, library):
     grid = find_with_sony_and_one_imported(qtbot, window, card, library)
     assert window.allow_reimport_check.isVisibleTo(window)
     assert not window.include_already_check.isVisibleTo(window)
-    grid.tick_all_button.click()
-    assert not window.plan.selected_count("already")
+    mouse_click(qtbot, grid, "R0000002")
+    assert window.import_button.text() == "Import 1 photo"  # just DSC00001
 
     window.allow_reimport_check.click()
     assert window.include_already_check.isVisibleTo(window)
-    assert checked(grid)["R0000002"] == "off"
-    grid.item_for("R0000002").setCheckState(Qt.CheckState.Checked)
-    assert window.plan.include_already
+    assert window.include_already_check.checkState() == Qt.CheckState.Checked
+    assert window.import_button.text() == "Import 2 photos"
     assert "1 already imported (1 to import again)" in window.status_label.text()
 
-    window.allow_reimport_check.click()  # turning it off unticks them again
-    assert checked(grid)["R0000002"] is None
-    assert not window.plan.selected_count("already")
+    window.allow_reimport_check.click()
+    assert window.import_button.text() == "Import 1 photo"
+    assert chosen(grid)["R0000002"] == "on"  # still selected, e.g. for deleting
+
+
+def test_delete_selected_photos_shown_from_the_card(qtbot, window, card, library):
+    grid = find_with_sony_and_one_imported(qtbot, window, card, library)
+    dcim = card / "DCIM"
+    view(grid, "Probably deleted")
+    grid.select_all_button.click()  # R0000001 pair; DSC00001 is selected too but not shown
+
+    grid.delete_button.click()
+    qtbot.waitUntil(lambda: not window._busy, timeout=10_000)
+
+    assert "Delete 1 photo (2 files) from the SD card?" in window.confirmations[-1]
+    assert "Recycle Bin" in window.confirmations[-1]
+    assert sorted(window.recycled) == ["R0000001.DNG", "R0000001.JPG"]
+    assert not (dcim / "100RICOH" / "R0000001.JPG").exists()
+    assert (dcim / "100RICOH" / "R0000002.JPG").exists()
+    assert (dcim / "100MSDCF" / "DSC00001.JPG").exists()
+    assert window.status_label.text() == "Deleted 1 photo from the card."
+    assert window.plan.older_count == 0
+    view(grid, "All on card")
+    assert [s.name for s in grid.shots()] == ["DSC00001", "R0000002"]
+
+
+def test_delete_is_disabled_without_a_selection(qtbot, window, card, library):
+    grid = find_with_sony_and_one_imported(qtbot, window, card, library)
+    assert grid.delete_button.isEnabled()
+    grid.select_none_button.click()
+    assert not grid.delete_button.isEnabled()
+    qtbot.keyClick(grid.list, Qt.Key.Key_Delete)
+    assert window.confirmations == []
 
 
 def test_settings_dialog_saves_general_settings_and_cameras(qtbot, window, library):

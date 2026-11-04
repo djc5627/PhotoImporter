@@ -42,6 +42,7 @@ from ..core.config import (
 )
 from ..core.copier import CopyResult, execute_plan
 from ..core.db import Database
+from ..core.deleter import DeleteResult, Recycler, default_recycler, delete_from_card, staging_root
 from ..core.exif import ExifToolReader, MetadataReader
 from ..core.indexer import ScanResult, scan_library
 from ..core.models import Camera
@@ -73,12 +74,16 @@ class MainWindow(QMainWindow):
         card_poll_ms: int = 2000,
         thumbnail_factory: Callable[[], ThumbnailSource] = ExifToolThumbnails,
         update_checker: Callable[[], Release | None] | None = newer_release,
+        recycler_factory: Callable[[], Recycler | None] = default_recycler,
+        deleted_staging: Path | None = None,
     ):
         super().__init__()
         self.db_path = db_path
         self.reader_factory = reader_factory
         self.card_detector = card_detector
         self.thumbnail_factory = thumbnail_factory
+        self.recycler = recycler_factory()
+        self.deleted_staging = deleted_staging or staging_root()
         self.db = Database(db_path)
         apply_exiftool_setting(self.db)
         self.plan: ImportPlan | None = None
@@ -241,6 +246,7 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.grid = ThumbnailGrid(self.thumbnail_factory)
         self.grid.selection_changed.connect(self._refresh_selection_view)
+        self.grid.delete_requested.connect(self.delete_selected)
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.addWidget(self.plan_tree)
         splitter.addWidget(self.grid)
@@ -504,7 +510,6 @@ class MainWindow(QMainWindow):
         self.allow_reimport_check.blockSignals(True)
         self.allow_reimport_check.setChecked(False)
         self.allow_reimport_check.blockSignals(False)
-        self.grid.allow_reimport = False
         self._refresh_plan_view()
 
     def _on_include_clicked(self, status: str, on: bool) -> None:
@@ -515,9 +520,9 @@ class MainWindow(QMainWindow):
         self._refresh_selection_view()
 
     def _on_allow_reimport(self, allow: bool) -> None:
-        if self.plan is not None and not allow:
-            self.plan.select(self.plan.photos("already"), False)
-        self.grid.set_allow_reimport(allow)
+        if self.plan is not None:
+            self.plan.allow_reimport = allow
+            self.grid.refresh_checks()
         self._refresh_selection_view()
 
     def _refresh_plan_view(self) -> None:
@@ -642,6 +647,49 @@ class MainWindow(QMainWindow):
             ]
         )
 
+    # Deleting from the card
+
+    def delete_selected(self) -> None:
+        """Delete the selected photos shown in the grid from the card, after confirming."""
+        photos = self.grid.chosen_shown()
+        if self._busy or self.plan is None or not photos:
+            return
+        amount = self._amount(len(group_shots(photos)), len(photos))
+        if self.recycler is not None:
+            where = (
+                "They'll be moved to the Windows Recycle Bin in case you need them back. "
+                f"Restoring puts them in this folder on your PC, not back on the card:\n"
+                f"{self.deleted_staging}"
+            )
+        else:
+            where = f"A copy of each is kept on this PC in:\n{self.deleted_staging}"
+        if not self._confirm(f"Delete {amount} from the SD card?\n\n{where}"):
+            return
+        paths = [p.path for p in photos]
+        recycler, staging = self.recycler, self.deleted_staging
+
+        def task(report: ReportProgress) -> DeleteResult:
+            return delete_from_card(
+                paths, recycler, staging, lambda d, t: report("Deleting from card", d, t)
+            )
+
+        self.grid.stop()
+        self._run("Deleting from card", task, self._on_delete_done)
+
+    def _on_delete_done(self, result: DeleteResult) -> None:
+        if self.plan is not None:
+            self.plan.remove(set(result.deleted))
+            self._refresh_plan_view()
+        pictures = len({(p.parent, p.stem.lower()) for p in result.deleted})
+        message = f"Deleted {_photos(pictures)} from the card."
+        self.status_label.setText(message)
+        if result.failed:
+            self._notify(
+                message
+                + f"\n{len(result.failed)} files were kept on the card:\n"
+                + "\n".join(f"{path.name}: {error}" for path, error in result.failed[:10])
+            )
+
     # Importing
 
     def start_import(self) -> None:
@@ -751,8 +799,12 @@ class MainWindow(QMainWindow):
             self.browse_source_button,
             *self._include_checks().values(),
             self.allow_reimport_check,
+            self.grid.select_all_button,
+            self.grid.select_none_button,
+            self.grid.list,
         ):
             widget.setEnabled(not busy)
+        self.grid.delete_button.setEnabled(not busy and bool(self.grid.chosen_shown()))
         if busy:
             self.import_button.setEnabled(False)
 

@@ -57,7 +57,8 @@ and photos you deleted from it (e.g. in Capture One), are skipped; tick *Include
 deleted ones anyway. Photos deleted after your newest remaining photo from a camera (e.g. a
 whole import folder you just deleted) have their own tick, separate from older culls.
 Thumbnails of every photo on the card are shown newest first, each labelled New, Already
-imported, Deleted and so on. Tick or untick photos to choose exactly what's imported; use *Show*
+imported, Deleted and so on. Click photos (Shift-click for a range) to choose exactly what's imported, or select some and
+use *Delete…* to remove them from the SD card (via the Windows Recycle Bin); use *Show*
 to look at one group, and select a camera to see only its photos. The first time
 a camera's photos are imported, the app asks which folders to use, pre-filled from where that
 camera's photos already are in your library.

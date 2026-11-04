@@ -71,8 +71,10 @@ class ImportPlan:
     source: Path
     target_dir: Path
     groups: list[CameraGroup]
-    # Card paths of the photos to import. Starts as the new photos.
+    # Card paths of the chosen (highlighted) photos. Starts as the new photos. Import copies
+    # these, except photos already in the library unless `allow_reimport` is on.
     selected: set[Path] | None = None
+    allow_reimport: bool = False
 
     def __post_init__(self) -> None:
         if self.selected is None:
@@ -109,7 +111,16 @@ class ImportPlan:
         return sum(p.path in self.selected for p in self.photos(status))
 
     def to_copy(self, group: CameraGroup) -> list[PhotoFile]:
-        return [p for p in group.photos() if p.path in self.selected]
+        already = set() if self.allow_reimport else {p.path for p in group.already}
+        return [p for p in group.photos() if p.path in self.selected and p.path not in already]
+
+    def remove(self, paths: set[Path]) -> None:
+        """Forget photos that are no longer on the card (e.g. deleted)."""
+        for group in self.groups:
+            for status in STATUSES:
+                setattr(group, status, [p for p in getattr(group, status) if p.path not in paths])
+        self.groups = [g for g in self.groups if g.photos()]
+        self.selected -= paths
 
     @property
     def items(self) -> list[PlanItem]:
@@ -158,14 +169,14 @@ class ImportPlan:
     def summary(self) -> str:
         if not (
             self.new_count or self.recent_deleted_count or self.deleted_count or self.older_count
-        ) and not self.selected_count("already"):
+        ) and not (self.allow_reimport and self.selected_count("already")):
             return f"Nothing new: all {self.already_count} photos already imported."
         new = "1 new photo" if self.new_count == 1 else f"{self.new_count} new photos"
         ticked_new = self.selected_count("new")
         if ticked_new != self.new_count:
-            new += f" ({ticked_new} ticked)"
+            new += f" ({ticked_new} selected)"
         already = f"{self.already_count} already imported"
-        if self.selected_count("already"):
+        if self.allow_reimport and self.selected_count("already"):
             already += f" ({self.selected_count('already')} to import again)"
         parts = [new, already]
         for count, status, label in (

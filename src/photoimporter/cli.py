@@ -103,7 +103,7 @@ def _make_plan(args: argparse.Namespace, db: Database, reader: MetadataReader) -
     plan.include_recent_deleted = args.include_recent_deleted
     plan.include_deleted = args.include_deleted
     plan.include_older = args.include_older
-    plan.include_already = args.include_imported
+    plan.allow_reimport = plan.include_already = args.include_imported
     return plan
 
 
