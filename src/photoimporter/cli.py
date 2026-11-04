@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .core.cameras import LibraryLayout, apply_camera_suggestions
 from .core.cards import detect_cards, scan_source
-from .core.config import new_import_folder, photos_root
+from .core.config import apply_exiftool_setting, date_format, new_import_folder, photos_root
 from .core.copier import execute_plan
 from .core.db import Database, default_db_path
 from .core.exif import ExifToolError, ExifToolReader, MetadataReader
@@ -36,10 +36,10 @@ def _resolve_source(arg: Path | None) -> Path:
     raise SystemExit(f"Several cards detected ({', '.join(map(str, cards))}). Pass one explicitly.")
 
 
-def _resolve_target(args: argparse.Namespace, root: Path) -> Path:
+def _resolve_target(args: argparse.Namespace, db: Database, root: Path) -> Path:
     if args.target is not None:
         return args.target
-    return new_import_folder(root, args.new, date.today())
+    return new_import_folder(root, args.new, date.today(), date_format(db))
 
 
 def _print_plan(plan: ImportPlan) -> None:
@@ -91,7 +91,7 @@ def _make_plan(args: argparse.Namespace, db: Database, reader: MetadataReader) -
     photos = scan_source(source, reader, _progress("Reading card"))
     plan = build_plan(
         source,
-        _resolve_target(args, root),
+        _resolve_target(args, db, root),
         photos,
         db.existing_keys(),
         db.cameras(),
@@ -228,7 +228,7 @@ def build_parser() -> argparse.ArgumentParser:
         target = p.add_mutually_exclusive_group(required=True)
         target.add_argument("--target", type=Path, help="existing import folder")
         target.add_argument(
-            "--new", metavar="DESCRIPTION", help="new folder named 'YYYY.MM.DD DESCRIPTION'"
+            "--new", metavar="DESCRIPTION", help="new folder named '<date> DESCRIPTION'"
         )
         p.add_argument("--no-scan", action="store_true", help="skip re-indexing the photos folder")
         p.add_argument(
@@ -255,6 +255,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None, reader_factory=ExifToolReader) -> int:
     args = build_parser().parse_args(argv)
     db = Database(args.db or default_db_path())
+    apply_exiftool_setting(db)
     try:
         return args.func(args, db, reader_factory)
     except ExifToolError as exc:

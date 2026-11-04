@@ -1,0 +1,88 @@
+name: Test and build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install Qt libraries and ExifTool
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libxkbcommon0 libimage-exiftool-perl
+      - run: uv sync
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pytest -q
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install Inno Setup if missing
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup -y --no-progress
+          }
+      - name: Cache the ExifTool download
+        uses: actions/cache@v4
+        with:
+          path: build/exiftool-*_64.zip
+          key: exiftool-${{ hashFiles('packaging/exiftool-version.txt') }}
+      - name: Build app, portable zip and installer
+        shell: pwsh
+        run: ./packaging/build.ps1
+      - name: Test (with the bundled ExifTool)
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $env:PATH = "$PWD\dist\PhotoImporter\exiftool;$env:PATH"
+          uv run pytest -q
+      - name: Check the packaged app starts
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          APPDATA: ${{ runner.temp }}\appdata
+        run: |
+          $app = Start-Process dist\PhotoImporter\PhotoImporter.exe -PassThru
+          Start-Sleep -Seconds 15
+          if ($app.HasExited) { throw "PhotoImporter.exe exited early with code $($app.ExitCode)" }
+          Stop-Process -Id $app.Id
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PhotoImporter-windows
+          path: |
+            dist/*-setup.exe
+            dist/*-portable.zip
+          if-no-files-found: error
+
+  # Pushing a tag like v1.0.1 publishes a GitHub release with the installer, the portable zip
+  # and that version's CHANGELOG.md section as its notes.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test-linux, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Release notes from CHANGELOG.md
+        run: python3 packaging/release_notes.py "$GITHUB_REF_NAME" > notes.md
+      - uses: actions/download-artifact@v4
+        with:
+          name: PhotoImporter-windows
+          path: dist
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*-setup.exe dist/*-portable.zip \
+            --title "Photo Importer ${GITHUB_REF_NAME#v}" --notes-file notes.md --verify-tag

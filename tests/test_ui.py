@@ -1,14 +1,34 @@
 import os
 from datetime import date
+from pathlib import Path
 
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from conftest import copy_by_hand  # noqa: E402
+from PySide6.QtCore import QBuffer  # noqa: E402
+from PySide6.QtGui import QColor, QImage  # noqa: E402
 
 from photoimporter.core.db import Database  # noqa: E402
+from photoimporter.core.thumbnails import Thumbnail  # noqa: E402
 from photoimporter.ui.main_window import MainWindow  # noqa: E402
+
+
+class FakeThumbnails:
+    """A 4x3 orange thumbnail for JPGs, none for RAWs."""
+
+    calls: list[list[Path]] = []
+
+    def extract(self, paths):
+        FakeThumbnails.calls.append(list(paths))
+        image = QImage(40, 30, QImage.Format.Format_RGB32)
+        image.fill(QColor("orange"))
+        buffer = QBuffer()
+        buffer.open(QBuffer.OpenModeFlag.WriteOnly)
+        image.save(buffer, "JPG")
+        data = bytes(buffer.data())
+        return {p: Thumbnail(data if p.suffix == ".JPG" else None) for p in paths}
 
 
 @pytest.fixture
@@ -18,7 +38,12 @@ def window(qtbot, tmp_path, library, reader, monkeypatch):
     db.set_setting("photos_root", str(library))
     db.close()
     win = MainWindow(
-        db_path, reader_factory=lambda: reader, card_detector=lambda: win.cards, card_poll_ms=50
+        db_path,
+        reader_factory=lambda: reader,
+        card_detector=lambda: win.cards,
+        card_poll_ms=50,
+        thumbnail_factory=FakeThumbnails,
+        update_checker=None,
     )
     qtbot.addWidget(win)
     win.cards = []
@@ -253,3 +278,167 @@ def test_camera_dialog_cleans_folder_names(qtbot):
     dialog.nickname_edit.setText("a7R V")
     assert ok.isEnabled()
     assert (dialog.camera().nickname, dialog.camera().folder_name) == ("a7R V", "sony_ a7r v")
+
+
+def test_thumbnail_grid_shows_raw_jpg_pairs_once(qtbot, window, card):
+    window.source_edit.setText(str(card))
+    with qtbot.waitSignal(window.grid.thumbnails_loaded, timeout=10_000):
+        window.find_button.click()
+
+    grid = window.grid
+    assert [(s.name, s.badge) for s in grid.shots()] == [("R0000001", "RAW+JPG"), ("R0000002", "")]
+    assert grid.view_combo.currentText() == "To import (3)"
+    assert grid.count_label.text() == "2 pictures (RAW+JPG pairs shown once)"
+    image = grid.cache[card / "DCIM" / "100RICOH" / "R0000001.JPG"]
+    assert (image.width(), image.height()) == (160, 120)  # scaled up to the tile, 4:3 kept
+
+
+def test_thumbnail_grid_views_follow_groups_and_cameras(qtbot, window, card, library):
+    from conftest import make_file
+
+    make_file(card / "DCIM" / "100MSDCF" / "DSC00001.JPG", b"sony-jpg")
+    copy_by_hand(card / "DCIM" / "100RICOH" / "R0000002.JPG", library / "x" / "R0000002.JPG")
+    window.source_edit.setText(str(card))
+    with qtbot.waitSignal(window.plan_ready, timeout=10_000):
+        window.find_button.click()
+    grid = window.grid
+
+    # R0000001 (10:00) is older than R0000002 (10:05, in the library): probably deleted.
+    assert [s.name for s in grid.shots()] == ["DSC00001"]
+    grid.view_combo.setCurrentIndex(4)  # Probably deleted
+    assert [s.name for s in grid.shots()] == ["R0000001"]
+
+    window.include_older_check.setChecked(True)
+    assert grid.view_combo.currentIndex() == 4  # the chosen view is kept
+    grid.view_combo.setCurrentIndex(0)
+    assert [s.name for s in grid.shots()] == ["R0000001", "DSC00001"]
+
+    ricoh = next(
+        window.plan_tree.topLevelItem(i)
+        for i in range(window.plan_tree.topLevelItemCount())
+        if window.plan_tree.topLevelItem(i).text(0).startswith("RICOH")
+    )
+    ricoh.setSelected(True)
+    assert [s.name for s in grid.shots()] == ["R0000001"]
+    window.include_older_check.setChecked(False)
+    assert window.plan_tree.selectedItems()[0].text(0).startswith("RICOH")
+    assert grid.shots() == []
+
+
+def test_settings_dialog_saves_general_settings_and_cameras(qtbot, window, library):
+    from photoimporter.core.config import format_date
+    from photoimporter.core.models import Camera
+    from photoimporter.ui.settings_dialog import SettingsDialog
+
+    db = window.db
+    db.save_camera(Camera("RICOH", "GR III", "Ricoh", "ricoh"))
+    db.save_camera(Camera("Canon", "EOS 6D Mark II", "6D", "canon 6d"))
+    dialog = SettingsDialog(db)
+    qtbot.addWidget(dialog)
+    ok = dialog.buttons.button(dialog.buttons.StandardButton.Ok)
+
+    dialog.date_combo.setCurrentText("YYYY.MM")
+    assert not ok.isEnabled()
+    dialog.date_combo.setCurrentText("M.D.YYYY")
+    assert ok.isEnabled()
+    today = format_date(date.today(), "M.D.YYYY")
+    assert dialog.date_preview.text().endswith(f"{today} Description")
+    dialog.find_on_insert_check.setChecked(False)
+
+    table = dialog.camera_table
+    assert [table.item(r, 1).text() for r in range(table.rowCount())] == ["6D", "Ricoh"]
+    table.item(1, 2).setText("  ricoh gr3 ")
+    table.item(1, 3).setText("")
+    table.selectRow(0)
+    dialog.forget_button.click()
+    dialog.accept()
+
+    assert db.get_setting("date_format") == "M.D.YYYY"
+    assert db.get_setting("find_on_insert") == "0"
+    assert db.cameras() == {
+        ("RICOH", "GR III"): Camera("RICOH", "GR III", "Ricoh", "ricoh gr3", "", "raw")
+    }
+
+
+def test_settings_changes_apply_to_the_open_plan(qtbot, window, card, monkeypatch):
+    from photoimporter.core.models import Camera
+
+    window.source_edit.setText(str(card))
+    with qtbot.waitSignal(window.plan_ready, timeout=10_000):
+        window.find_button.click()
+    assert window.plan_tree.topLevelItem(0).text(0) == "RICOH GR III (new camera)"
+
+    def edit_settings():
+        camera = window.plan.groups[0].camera
+        window.db.save_camera(Camera(camera.make, camera.model, "GR", "gr"))
+        window.db.set_setting("date_format", "YYYY-MM-DD")
+        return True
+
+    monkeypatch.setattr(window, "_exec_settings", edit_settings)
+    window.description_edit.setText("Walk")
+    window.open_settings()
+
+    assert window.plan_tree.topLevelItem(0).text(0) == "GR"
+    assert window.plan_tree.topLevelItem(0).text(1).startswith(f"gr{os.sep}")
+    assert window.target_preview.text().endswith(f"{date.today():%Y-%m-%d} Walk")
+
+
+def test_card_insert_can_just_fill_in_the_source(qtbot, window, card):
+    window.db.set_setting("find_on_insert", "0")
+    window.cards = [card]
+    qtbot.waitUntil(lambda: window.source_edit.text() == str(card), timeout=5_000)
+    assert window.plan is None
+    assert window.status_label.text() == f"Card inserted: {card}. Click Find new photos."
+
+
+def make_window(qtbot, tmp_path, update_checker):
+    win = MainWindow(
+        tmp_path / "ui.db",
+        card_detector=lambda: [],
+        thumbnail_factory=FakeThumbnails,
+        update_checker=update_checker,
+    )
+    qtbot.addWidget(win)
+    return win
+
+
+def test_update_bar_offers_a_newer_release(qtbot, tmp_path, monkeypatch):
+    from photoimporter.core.updates import Release
+
+    opened = []
+    monkeypatch.setattr("PySide6.QtGui.QDesktopServices.openUrl", lambda url: opened.append(url))
+    release = Release("9.0.0", "https://github.com/x/y/releases/tag/v9.0.0", None)
+    win = make_window(qtbot, tmp_path, lambda: release)
+    qtbot.waitUntil(lambda: win.update_bar.isVisibleTo(win), timeout=5_000)
+    assert "Photo Importer 9.0.0" in win.update_label.text()
+
+    win.update_download_button.click()
+    assert opened[0].toString() == release.page_url
+
+    win.update_skip_button.click()
+    assert not win.update_bar.isVisibleTo(win)
+    assert win.db.get_setting("skipped_version") == "9.0.0"
+    win.close()
+
+    again = make_window(qtbot, tmp_path, lambda: release)
+    with qtbot.waitSignal(again.update_checked, timeout=5_000):
+        pass
+    assert not again.update_bar.isVisibleTo(again)  # skipped version stays quiet
+
+
+def test_update_check_failures_and_opt_out_are_quiet(qtbot, tmp_path):
+    def offline():
+        raise OSError("no network")
+
+    win = make_window(qtbot, tmp_path, offline)
+    with qtbot.waitSignal(win.update_checked, timeout=5_000) as signal:
+        pass
+    assert signal.args == [None]
+    assert not win.update_bar.isVisibleTo(win)
+    win.db.set_setting("check_updates", "0")
+    win.close()
+
+    calls = []
+    make_window(qtbot, tmp_path, lambda: calls.append(1))
+    qtbot.wait(100)
+    assert calls == []

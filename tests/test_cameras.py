@@ -24,3 +24,16 @@ def test_unknown_model_gets_default_folders(db, library):
 
     assert not matched
     assert (camera.folder_name, camera.jpg_dir, camera.raw_dir) == ("ilce-7rm5", "jpg", "raw")
+
+
+def test_names_are_spelled_as_on_disk_even_if_the_index_is_lowercase(db, library, reader):
+    make_file(library / "2025.01.01 trip" / "GR3" / "JPEG" / "R0000001.JPG")
+    scan_library(db, library, reader)
+    # On Windows the index holds lowercased paths (simulated here for the camera folders).
+    db.conn.execute("UPDATE files SET path = replace(path, 'GR3/JPEG', 'gr3/jpeg')")
+
+    layout = LibraryLayout.from_db(db, library)
+
+    camera, _ = layout.suggest(RICOH["make"], RICOH["model"])
+    assert (camera.folder_name, camera.jpg_dir) == ("GR3", "JPEG")
+    assert layout.camera_folders == ["GR3"]

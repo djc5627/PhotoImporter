@@ -5,11 +5,12 @@ from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
-from PySide6.QtCore import QThreadPool, Signal
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtCore import Qt, QThreadPool, QUrl, Signal
+from PySide6.QtGui import QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
     QFileDialog,
+    QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -21,24 +22,37 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QRadioButton,
+    QSplitter,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
+from .. import __version__
 from ..core.cameras import LibraryLayout, apply_camera_suggestions
 from ..core.cards import detect_cards, scan_source
-from ..core.config import new_import_folder, photos_root
+from ..core.config import (
+    apply_exiftool_setting,
+    check_for_updates,
+    date_format,
+    find_on_insert,
+    new_import_folder,
+    photos_root,
+)
 from ..core.copier import CopyResult, execute_plan
 from ..core.db import Database
 from ..core.exif import ExifToolReader, MetadataReader
 from ..core.indexer import ScanResult, scan_library
 from ..core.models import Camera
 from ..core.planner import CameraGroup, ImportPlan, build_plan
+from ..core.thumbnails import ExifToolThumbnails, ThumbnailSource
+from ..core.updates import Release, newer_release
 from .camera_dialog import CameraDialog
 from .card_watcher import CardWatcher
-from .workers import ReportProgress, Worker
+from .settings_dialog import SettingsDialog
+from .thumbnail_grid import ThumbnailGrid
+from .workers import BackgroundCall, ReportProgress, Worker
 
 
 def _photos(n: int) -> str:
@@ -49,6 +63,7 @@ class MainWindow(QMainWindow):
     plan_ready = Signal(object)
     import_done = Signal(object)
     task_failed = Signal(str)
+    update_checked = Signal(object)  # Release or None
 
     def __init__(
         self,
@@ -56,12 +71,16 @@ class MainWindow(QMainWindow):
         reader_factory: Callable[[], MetadataReader] = ExifToolReader,
         card_detector: Callable[[], list[Path]] = detect_cards,
         card_poll_ms: int = 2000,
+        thumbnail_factory: Callable[[], ThumbnailSource] = ExifToolThumbnails,
+        update_checker: Callable[[], Release | None] | None = newer_release,
     ):
         super().__init__()
         self.db_path = db_path
         self.reader_factory = reader_factory
         self.card_detector = card_detector
+        self.thumbnail_factory = thumbnail_factory
         self.db = Database(db_path)
+        apply_exiftool_setting(self.db)
         self.plan: ImportPlan | None = None
         self.camera_folders: list[str] = []
         self._worker: Worker | None = None
@@ -70,9 +89,10 @@ class MainWindow(QMainWindow):
         self._pending_card: Path | None = None
 
         self.setWindowTitle("Photo Importer")
-        self.resize(860, 620)
+        self.resize(1000, 820)
         central = QWidget()
         layout = QVBoxLayout(central)
+        layout.addWidget(self._build_update_bar())
         layout.addWidget(self._build_library_box())
         layout.addWidget(self._build_target_box())
         layout.addWidget(self._build_source_box())
@@ -88,7 +108,38 @@ class MainWindow(QMainWindow):
         self.card_watcher.removed.connect(self.on_card_removed)
         self.card_watcher.start()
 
+        self.update_checker = update_checker
+        self._update_call: BackgroundCall | None = None
+        if update_checker is not None and check_for_updates(self.db):
+            self.check_for_update()
+
     # Layout
+
+    def _build_update_bar(self) -> QFrame:
+        self.update_bar = QFrame()
+        self.update_bar.setObjectName("updateBar")
+        self.update_bar.setStyleSheet(
+            "#updateBar { background: #e6f0fb; border: 1px solid #9cc1e8; border-radius: 4px; }"
+        )
+        row = QHBoxLayout(self.update_bar)
+        row.setContentsMargins(10, 4, 4, 4)
+        self.update_label = QLabel()
+        self.update_download_button = QPushButton("What's new && download")
+        self.update_download_button.clicked.connect(self._open_update)
+        self.update_skip_button = QPushButton("Skip this version")
+        self.update_skip_button.clicked.connect(self._skip_update)
+        self.update_close_button = QPushButton("Not now")
+        self.update_close_button.clicked.connect(self.update_bar.hide)
+        row.addWidget(self.update_label, stretch=1)
+        for button in (
+            self.update_download_button,
+            self.update_skip_button,
+            self.update_close_button,
+        ):
+            row.addWidget(button)
+        self.update_bar.hide()
+        self.available_update: Release | None = None
+        return self.update_bar
 
     def _build_library_box(self) -> QGroupBox:
         box = QGroupBox("Photo library")
@@ -101,6 +152,9 @@ class MainWindow(QMainWindow):
         row.addWidget(self.library_label, stretch=1)
         row.addWidget(self.change_root_button)
         row.addWidget(self.rescan_button)
+        self.settings_button = QPushButton("Settings…")
+        self.settings_button.clicked.connect(self.open_settings)
+        row.addWidget(self.settings_button)
         return box
 
     def _build_target_box(self) -> QGroupBox:
@@ -179,11 +233,19 @@ class MainWindow(QMainWindow):
             7, "Older than the newest library photo from this camera, so most likely deleted"
         )
         self.plan_tree.setRootIsDecorated(False)
+        self.plan_tree.setToolTip("Select a camera to show only its photos below")
+        self.plan_tree.itemSelectionChanged.connect(self._refresh_grid)
         header = self.plan_tree.header()
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        layout.addWidget(self.plan_tree)
+        self.grid = ThumbnailGrid(self.thumbnail_factory)
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter.addWidget(self.plan_tree)
+        splitter.addWidget(self.grid)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([110, 400])
+        layout.addWidget(splitter)
 
         self.include_recent_deleted_check = QCheckBox()
         self.include_recent_deleted_check.setToolTip(
@@ -241,6 +303,60 @@ class MainWindow(QMainWindow):
             self._refresh_library_label()
             self._refresh_target_preview()
 
+    # Updates
+
+    def check_for_update(self) -> None:
+        """Look for a newer release in the background; show a bar if there is one."""
+        call = BackgroundCall(self.update_checker)
+        call.signals.finished.connect(self._on_update_checked)
+        call.signals.failed.connect(lambda _message: self.update_checked.emit(None))  # offline
+        self._update_call = call
+        QThreadPool.globalInstance().start(call)
+
+    def _on_update_checked(self, release: Release | None) -> None:
+        if release is not None and release.version != self.db.get_setting("skipped_version"):
+            self.available_update = release
+            self.update_label.setText(
+                f"<b>Photo Importer {release.version}</b> is available (you have {__version__})."
+            )
+            self.update_bar.show()
+        self.update_checked.emit(release)
+
+    def _open_update(self) -> None:
+        if self.available_update is not None:
+            QDesktopServices.openUrl(QUrl(self.available_update.page_url))
+
+    def _skip_update(self) -> None:
+        if self.available_update is not None:
+            self.db.set_setting("skipped_version", self.available_update.version)
+        self.update_bar.hide()
+
+    # Settings
+
+    def open_settings(self) -> None:
+        if self._exec_settings():
+            self._apply_settings()
+
+    def _exec_settings(self) -> bool:
+        dialog = SettingsDialog(self.db, self, self.update_checker or newer_release)
+        return dialog.exec() == SettingsDialog.DialogCode.Accepted
+
+    def _apply_settings(self) -> None:
+        apply_exiftool_setting(self.db)
+        self._refresh_library_label()
+        self._refresh_target_preview()
+        if self.plan is not None:
+            # Camera names and folders may have changed.
+            cameras = self.db.cameras()
+            for group in self.plan.groups:
+                camera = cameras.get((group.camera.make, group.camera.model))
+                if camera is not None:
+                    group.camera, group.registered = camera, True
+                elif group.registered:
+                    group.camera = Camera.default_for(group.camera.make, group.camera.model)
+                    group.registered = False
+            self._refresh_plan_view()
+
     def rescan_library(self) -> None:
         root = photos_root(self.db)
         db_path, reader_factory = self.db_path, self.reader_factory
@@ -270,7 +386,9 @@ class MainWindow(QMainWindow):
             description = self.description_edit.text().strip()
             if not description:
                 return None
-            return new_import_folder(photos_root(self.db), description, date.today())
+            return new_import_folder(
+                photos_root(self.db), description, date.today(), date_format(self.db)
+            )
         text = self.existing_edit.text().strip()
         return Path(text) if text else None
 
@@ -304,6 +422,11 @@ class MainWindow(QMainWindow):
 
     def on_card_inserted(self, card: Path) -> None:
         """A card was inserted (or was already in when the app started): look at it."""
+        if not find_on_insert(self.db):
+            if not self._busy:
+                self.source_edit.setText(str(card))
+                self.status_label.setText(f"Card inserted: {card}. Click Find new photos.")
+            return
         if self._busy:
             self._pending_card = card
             self.status_label.setText(f"Card inserted: {card}. Checking it when this finishes…")
@@ -382,14 +505,22 @@ class MainWindow(QMainWindow):
 
     def _refresh_plan_view(self) -> None:
         plan = self.plan
+        selected = {self.plan_tree.indexOfTopLevelItem(i) for i in self.plan_tree.selectedItems()}
+        self.plan_tree.blockSignals(True)
         self.plan_tree.clear()
         self._refresh_include_checks()
         if plan is None:
+            self.plan_tree.blockSignals(False)
+            self.grid.set_plan(None)
             self.import_button.setEnabled(False)
             self.import_button.setText("Import")
             return
-        for group in plan.groups:
-            self.plan_tree.addTopLevelItem(self._plan_row(plan, group))
+        for index, group in enumerate(plan.groups):
+            item = self._plan_row(plan, group)
+            self.plan_tree.addTopLevelItem(item)
+            item.setSelected(index in selected)
+        self.plan_tree.blockSignals(False)
+        self._refresh_grid()
         self.import_button.setEnabled(plan.copy_count > 0)
         self.import_button.setText(f"Import {plan.copy_count}" if plan.copy_count else "Import")
         self.status_label.setText(plan.summary())
@@ -400,6 +531,13 @@ class MainWindow(QMainWindow):
             self.include_deleted_check,
             self.include_older_check,
         )
+
+    def _refresh_grid(self) -> None:
+        if self.plan is None:
+            self.grid.set_plan(None)
+            return
+        rows = sorted(self.plan_tree.indexOfTopLevelItem(i) for i in self.plan_tree.selectedItems())
+        self.grid.set_plan(self.plan, [self.plan.groups[r] for r in rows])
 
     def _refresh_include_checks(self) -> None:
         plan = self.plan
@@ -464,6 +602,7 @@ class MainWindow(QMainWindow):
         plan.target_dir = target
         if not self._confirm(f"Copy {plan.copy_count} photos into\n{target}?"):
             return
+        self.grid.stop()  # don't compete with the copy for the card
         db_path, cancel = self.db_path, self._cancel
         cancel.clear()
 
@@ -543,6 +682,7 @@ class MainWindow(QMainWindow):
         for widget in (
             self.change_root_button,
             self.rescan_button,
+            self.settings_button,
             self.find_button,
             self.detect_button,
             self.browse_source_button,
@@ -576,6 +716,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self.card_watcher.stop()
+        self.grid.stop()
         self._cancel.set()
         QThreadPool.globalInstance().waitForDone()
         self.db.close()
