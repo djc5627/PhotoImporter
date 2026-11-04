@@ -2,6 +2,21 @@
 
 All notable changes to Photo Importer. Each version's section becomes the notes of its [GitHub release](https://github.com/djc5627/PhotoImporter/releases).
 
+## [1.2.0] - 2026-11-04
+
+More room for your photos.
+
+### Added
+- **Thumbnail size slider** (Small / Medium / Large) on the grid toolbar; Ctrl+scroll over the photos does the same, and your choice is remembered. Large uses the camera's bigger embedded preview so it stays sharp.
+- **The window remembers its size and position**, including being maximised. The first time it opens at 1280×900, centred, which fits a 1080p screen.
+
+### Changed
+- **Thumbnails fill the whole width.** A row gets another column once at least half of one more photo fits, and the tiles resize slightly so the row ends exactly at the edge. This updates as you resize the window.
+- **Include menu:** the four *Include…* ticks under the grid are now one *Include* menu on the grid toolbar, with a count for each kind of skipped photo. The button shows how many kinds you've included, e.g. *Include (1)*.
+- **Camera dropdown** on the grid toolbar replaces the camera table. It only appears when the card has photos from more than one camera. The import confirmation still lists each camera's folders and counts.
+- **Compact top:** Library, Import into and Import from are plain rows instead of boxed sections.
+- **Footer:** a shorter summary that is cut off with … (full text on hover) instead of widening the window, and a blue Import button.
+
 ## [1.1.0] - 2026-11-04
 
 ### Added
