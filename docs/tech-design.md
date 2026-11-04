@@ -112,7 +112,8 @@ tests/             # pytest for core; fixtures with sample files per camera
 3. **Preview:**
    - Summary per camera, e.g. "Ricoh GR III — 42 new (42 jpg, 42 raw), 310 already imported".
    - Thumbnail grid below the summary, loaded in the background in small batches so the first tiles appear quickly. A RAW+JPG pair (same folder, name and capture time) is one tile marked `RAW+JPG`; a RAW-only shot is marked `RAW`.
-   - A *Show* menu switches the grid between *To import* (follows the Include ticks), each skipped group, and *Already imported*. Selecting a camera in the summary limits the grid to that camera. Double-clicking a tile opens the photo in the default viewer. Hovering shows its files, camera and capture time.
+   - A *Show* menu switches the grid between *All on card* (the default), *Ticked for import*, and each status group. Tiles are sorted newest first (capture time, else file date) and carry a coloured status label.
+   - Each tile has a tick box; the plan keeps the set of ticked card files (new photos ticked at first). A RAW+JPG pair shares one tick box. The group *Include* ticks tick or untick a whole status group and show partial state. Already-imported photos can be ticked only after *Allow re-importing photos already in the library* is switched on. *Tick all*/*Untick all* act on the tiles shown; Space flips the selected tiles. Selecting a camera in the summary limits the grid to that camera. Double-clicking a tile opens the photo in the default viewer. Hovering shows its files, camera and capture time.
    - Thumbnail loading stops when an import starts, so it doesn't slow the copy.
 4. **Import:** progress bar, then a result summary. Then insert the next card and repeat into the same target folder.
 5. **Settings:** photos root, date format, camera registry editor.

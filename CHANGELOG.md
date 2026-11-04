@@ -2,6 +2,19 @@
 
 All notable changes to Photo Importer. Each version's section becomes the notes of its [GitHub release](https://github.com/djc5627/PhotoImporter/releases).
 
+## [1.1.0] - 2026-11-04
+
+### Added
+- **Choose photos one by one.** Every thumbnail has a tick box; only ticked photos are imported. New photos start out ticked. A RAW+JPG pair shares one tick box and is imported together.
+- **Tick all** and **Untick all** buttons for the photos shown, and **Space** flips the tick boxes of all selected thumbnails (select several with Shift- or Ctrl-click).
+- **All on card** view, now the default: every photo on the card, each with a coloured label for its status (New, Recently deleted, Deleted, Probably deleted, Already imported). A **Ticked for import** view shows just what will be copied.
+- **Allow re-importing photos already in the library**: off by default; when switched on, already-imported photos can be ticked to copy them again into the import folder. The command line has `--include-imported` for the same.
+
+### Changed
+- Thumbnails are sorted newest first, so new photos are at the top.
+- The *Include* ticks for deleted photos now tick or untick every photo in that group, and show as partly ticked when you've changed some by hand.
+- The Import button says how many photos and files will be copied, e.g. *Import 42 photos (68 files)*.
+
 ## [1.0.0] - 2026-11-04
 
 First release.

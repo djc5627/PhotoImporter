@@ -103,6 +103,7 @@ def _make_plan(args: argparse.Namespace, db: Database, reader: MetadataReader) -
     plan.include_recent_deleted = args.include_recent_deleted
     plan.include_deleted = args.include_deleted
     plan.include_older = args.include_older
+    plan.include_already = args.include_imported
     return plan
 
 
@@ -240,6 +241,11 @@ def build_parser() -> argparse.ArgumentParser:
             "--include-deleted",
             action="store_true",
             help="also import photos that were imported before and later deleted",
+        )
+        p.add_argument(
+            "--include-imported",
+            action="store_true",
+            help="also copy photos that are already in the library (again)",
         )
         p.add_argument(
             "--include-older",

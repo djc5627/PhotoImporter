@@ -56,8 +56,9 @@ Insert an SD card and the app finds its new photos on its own. Photos already in
 and photos you deleted from it (e.g. in Capture One), are skipped; tick *Include* to import
 deleted ones anyway. Photos deleted after your newest remaining photo from a camera (e.g. a
 whole import folder you just deleted) have their own tick, separate from older culls.
-Thumbnails of the photos are shown before you import. Use *Show* to look through any group
-(e.g. what's in *Recently deleted*), and select a camera to see only its photos. The first time
+Thumbnails of every photo on the card are shown newest first, each labelled New, Already
+imported, Deleted and so on. Tick or untick photos to choose exactly what's imported; use *Show*
+to look at one group, and select a camera to see only its photos. The first time
 a camera's photos are imported, the app asks which folders to use, pre-filled from where that
 camera's photos already are in your library.
 

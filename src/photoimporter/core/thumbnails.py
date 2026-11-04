@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import time
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,6 +42,18 @@ class Shot:
     def capture_time(self) -> str | None:
         return self.primary.meta.capture_time
 
+    @property
+    def sort_time(self) -> str:
+        """When the shot was taken, as 'YYYY:MM:DD HH:MM:SS[.subsec]', for sorting.
+
+        Uses the file's date when there is no EXIF capture time.
+        """
+        meta = self.primary.meta
+        when = meta.capture_time or time.strftime(
+            "%Y:%m:%d %H:%M:%S", time.localtime(self.primary.mtime)
+        )
+        return when + (f".{meta.subsec}" if meta.subsec else "")
+
 
 def _shot_key(photo: PhotoFile) -> tuple[str, str, str]:
     when = photo.meta.capture_time or f"mtime:{int(photo.mtime) // 2 * 2}"
@@ -50,11 +63,11 @@ def _shot_key(photo: PhotoFile) -> tuple[str, str, str]:
 
 
 def group_shots(photos: Iterable[PhotoFile]) -> list[Shot]:
-    """Pair files of the same shot (same folder, name and time), in capture order."""
+    """Pair files of the same shot (same folder, name and time), newest first."""
     shots: dict[tuple[str, str, str], Shot] = {}
     for photo in photos:
         shots.setdefault(_shot_key(photo), Shot()).photos.append(photo)
-    return sorted(shots.values(), key=lambda s: (s.capture_time or "", s.name.lower()))
+    return sorted(shots.values(), key=lambda s: (s.sort_time, s.name.lower()), reverse=True)
 
 
 @dataclass(frozen=True)

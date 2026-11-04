@@ -75,3 +75,14 @@ def test_missing_exiftool_reports_cleanly(tmp_path, library, monkeypatch, capsys
 
     assert main([*db, "scan"]) == 2
     assert "ExifTool was not found" in capsys.readouterr().err
+
+
+def test_include_imported_copies_again(tmp_path, card, library, reader, capsys):
+    db = ["--db", str(tmp_path / "cli.db")]
+    run = lambda *args: main([*db, *args], reader_factory=lambda: reader)  # noqa: E731
+    run("config", "--root", str(library))
+    run("import", str(card), "--target", str(library / "a"), "--yes")
+
+    run("import", str(card), "--target", str(library / "b"), "--yes", "--include-imported")
+
+    assert (library / "b" / "ricoh gr iii" / "raw" / "R0000001.DNG").is_file()

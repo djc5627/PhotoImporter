@@ -46,7 +46,7 @@ from ..core.exif import ExifToolReader, MetadataReader
 from ..core.indexer import ScanResult, scan_library
 from ..core.models import Camera
 from ..core.planner import CameraGroup, ImportPlan, build_plan
-from ..core.thumbnails import ExifToolThumbnails, ThumbnailSource
+from ..core.thumbnails import ExifToolThumbnails, ThumbnailSource, group_shots
 from ..core.updates import Release, newer_release
 from .camera_dialog import CameraDialog
 from .card_watcher import CardWatcher
@@ -240,6 +240,7 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.grid = ThumbnailGrid(self.thumbnail_factory)
+        self.grid.selection_changed.connect(self._refresh_selection_view)
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.addWidget(self.plan_tree)
         splitter.addWidget(self.grid)
@@ -264,8 +265,18 @@ class MainWindow(QMainWindow):
             "already there from the same camera, so they were most likely imported and\n"
             "deleted before the app kept a history. Skipped unless ticked."
         )
-        for check in self._include_checks():
-            check.toggled.connect(self._on_include_toggled)
+        self.allow_reimport_check = QCheckBox("Allow re-importing photos already in the library")
+        self.allow_reimport_check.setToolTip(
+            "Lets you tick photos that are already in your library, to copy them again\n"
+            "into this import folder. Off each time you look at a card."
+        )
+        self.allow_reimport_check.toggled.connect(self._on_allow_reimport)
+        self.include_already_check = QCheckBox()
+        self.include_already_check.setToolTip("Copies these photos again into this import folder.")
+        for status, check in self._include_checks().items():
+            check.clicked.connect(lambda on, status=status: self._on_include_clicked(status, on))
+            if status == "already":
+                layout.addWidget(self.allow_reimport_check)
             layout.addWidget(check)
         self._refresh_include_checks()
         return box
@@ -488,20 +499,26 @@ class MainWindow(QMainWindow):
         self.plan_ready.emit(plan)
 
     def _set_plan(self, plan: ImportPlan | None) -> None:
-        """Show a fresh plan. Deleted photos always start out skipped."""
+        """Show a fresh plan: only new photos ticked, re-importing not allowed."""
         self.plan = plan
-        for check in self._include_checks():
-            check.blockSignals(True)
-            check.setChecked(False)
-            check.blockSignals(False)
+        self.allow_reimport_check.blockSignals(True)
+        self.allow_reimport_check.setChecked(False)
+        self.allow_reimport_check.blockSignals(False)
+        self.grid.allow_reimport = False
         self._refresh_plan_view()
 
-    def _on_include_toggled(self) -> None:
+    def _on_include_clicked(self, status: str, on: bool) -> None:
+        """An Include tick was clicked: tick or untick all photos with that status."""
         if self.plan is not None:
-            self.plan.include_recent_deleted = self.include_recent_deleted_check.isChecked()
-            self.plan.include_deleted = self.include_deleted_check.isChecked()
-            self.plan.include_older = self.include_older_check.isChecked()
-        self._refresh_plan_view()
+            self.plan.select(self.plan.photos(status), on)
+            self.grid.refresh_checks()
+        self._refresh_selection_view()
+
+    def _on_allow_reimport(self, allow: bool) -> None:
+        if self.plan is not None and not allow:
+            self.plan.select(self.plan.photos("already"), False)
+        self.grid.set_allow_reimport(allow)
+        self._refresh_selection_view()
 
     def _refresh_plan_view(self) -> None:
         plan = self.plan
@@ -521,16 +538,42 @@ class MainWindow(QMainWindow):
             item.setSelected(index in selected)
         self.plan_tree.blockSignals(False)
         self._refresh_grid()
-        self.import_button.setEnabled(plan.copy_count > 0)
-        self.import_button.setText(f"Import {plan.copy_count}" if plan.copy_count else "Import")
+        self._refresh_selection_view()
+
+    def _refresh_selection_view(self) -> None:
+        """Update everything that depends on which photos are ticked, without redrawing the grid."""
+        plan = self.plan
+        self._refresh_include_checks()
+        if plan is None:
+            self.import_button.setEnabled(False)
+            self.import_button.setText("Import")
+            return
+        for index, group in enumerate(plan.groups):
+            self.plan_tree.topLevelItem(index).setText(1, self._saved_to(plan, group))
+        pictures, files = self._import_counts()
+        self.import_button.setEnabled(files > 0)
+        self.import_button.setText(f"Import {self._amount(pictures, files)}" if files else "Import")
         self.status_label.setText(plan.summary())
 
-    def _include_checks(self) -> tuple[QCheckBox, QCheckBox, QCheckBox]:
-        return (
-            self.include_recent_deleted_check,
-            self.include_deleted_check,
-            self.include_older_check,
-        )
+    def _import_counts(self) -> tuple[int, int]:
+        """(pictures, files) ticked for import; a RAW+JPG pair is one picture, two files."""
+        if self.plan is None:
+            return 0, 0
+        files = [p for g in self.plan.groups for p in self.plan.to_copy(g)]
+        return len(group_shots(files)), len(files)
+
+    @staticmethod
+    def _amount(pictures: int, files: int) -> str:
+        text = _photos(pictures)
+        return text if files == pictures else f"{text} ({files} files)"
+
+    def _include_checks(self) -> dict[str, QCheckBox]:
+        return {
+            "recent_deleted": self.include_recent_deleted_check,
+            "deleted": self.include_deleted_check,
+            "older": self.include_older_check,
+            "already": self.include_already_check,
+        }
 
     def _refresh_grid(self) -> None:
         if self.plan is None:
@@ -544,6 +587,22 @@ class MainWindow(QMainWindow):
         recent = plan.recent_deleted_count if plan else 0
         deleted = plan.deleted_count if plan else 0
         older = plan.older_count if plan else 0
+        already = plan.already_count if plan else 0
+        self.include_already_check.setText(f"Include {_photos(already)} already imported")
+        self.allow_reimport_check.setVisible(already > 0)
+        self.include_already_check.setVisible(already > 0 and self.allow_reimport_check.isChecked())
+        for status, check in self._include_checks().items():
+            total = len(plan.photos(status)) if plan else 0
+            ticked = plan.selected_count(status) if plan else 0
+            if ticked == 0:
+                state = Qt.CheckState.Unchecked
+            elif ticked == total:
+                state = Qt.CheckState.Checked
+            else:
+                state = Qt.CheckState.PartiallyChecked
+            check.blockSignals(True)
+            check.setCheckState(state)
+            check.blockSignals(False)
         self.include_recent_deleted_check.setText(
             f"Include {_photos(recent)} recently deleted "
             "(newer than your newest library photo from that camera)"
@@ -560,16 +619,20 @@ class MainWindow(QMainWindow):
         self.include_older_check.setVisible(older > 0)
 
     @staticmethod
-    def _plan_row(plan: ImportPlan, group: CameraGroup) -> QTreeWidgetItem:
+    def _saved_to(plan: ImportPlan, group: CameraGroup) -> str:
+        cam = group.camera
+        kinds = sorted({p.kind for p in plan.to_copy(group)})
+        return ", ".join(str(Path(cam.folder_name, cam.subdir_for(k))) for k in kinds) or "—"
+
+    @classmethod
+    def _plan_row(cls, plan: ImportPlan, group: CameraGroup) -> QTreeWidgetItem:
         cam = group.camera
         counts = group.new_by_kind()
         name = cam.nickname if group.registered else f"{cam.nickname} (new camera)"
-        kinds = sorted({p.kind for p in plan.to_copy(group)})
-        folders = ", ".join(str(Path(cam.folder_name, cam.subdir_for(k))) for k in kinds) or "—"
         return QTreeWidgetItem(
             [
                 name,
-                folders,
+                cls._saved_to(plan, group),
                 str(counts["jpg"]),
                 str(counts["raw"]),
                 str(len(group.already)),
@@ -600,7 +663,7 @@ class MainWindow(QMainWindow):
             group.camera, group.registered = camera, True
             self._refresh_plan_view()
         plan.target_dir = target
-        if not self._confirm(f"Copy {plan.copy_count} photos into\n{target}?"):
+        if not self._confirm(f"Copy {self._amount(*self._import_counts())} into\n{target}?"):
             return
         self.grid.stop()  # don't compete with the copy for the card
         db_path, cancel = self.db_path, self._cancel
@@ -686,7 +749,8 @@ class MainWindow(QMainWindow):
             self.find_button,
             self.detect_button,
             self.browse_source_button,
-            *self._include_checks(),
+            *self._include_checks().values(),
+            self.allow_reimport_check,
         ):
             widget.setEnabled(not busy)
         if busy:

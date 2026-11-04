@@ -25,12 +25,30 @@ def test_raw_and_jpg_of_a_shot_are_paired(tmp_path):
         ]
     )
 
-    assert [(s.name, s.badge, s.primary.filename) for s in shots] == [
-        ("R1", "RAW+JPG", "R1.JPG"),
-        ("R2", "", "R2.JPG"),
-        ("R3", "RAW", "R3.DNG"),
+    assert [(s.name, s.badge, s.primary.filename) for s in shots] == [  # newest first
         ("R1", "", "R1.JPG"),
+        ("R3", "RAW", "R3.DNG"),
+        ("R2", "", "R2.JPG"),
+        ("R1", "RAW+JPG", "R1.JPG"),
     ]
+
+
+def test_photos_without_capture_time_sort_by_file_date(tmp_path):
+    import time
+
+    from photoimporter.core.models import PhotoFile, PhotoMeta
+
+    old = time.mktime((2020, 1, 1, 12, 0, 0, 0, 0, -1))
+    shots = group_shots(
+        [
+            PhotoFile(tmp_path / "OLD.JPG", 1, old, PhotoMeta()),
+            photo(tmp_path / "MID.JPG", "2024:06:01 08:00:00"),
+            PhotoFile(
+                tmp_path / "NEW.JPG", 1, time.mktime((2026, 1, 1, 0, 0, 0, 0, 0, -1)), PhotoMeta()
+            ),
+        ]
+    )
+    assert [s.name for s in shots] == ["NEW", "MID", "OLD"]
 
 
 def test_burst_shots_in_the_same_second_stay_apart(tmp_path):
