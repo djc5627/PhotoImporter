@@ -43,7 +43,21 @@ if (-not $ExifToolZip) {
     $ExifToolZip = "build\exiftool-${ExifVersion}_64.zip"
     if (-not (Test-Path $ExifToolZip)) {
         Write-Host "Downloading ExifTool $ExifVersion"
-        Invoke-WebRequest "https://exiftool.org/exiftool-${ExifVersion}_64.zip" -OutFile $ExifToolZip -UseBasicParsing
+        # exiftool.org links its Windows zips to SourceForge; try exiftool.org itself as a fallback.
+        $Urls = @(
+            "https://sourceforge.net/projects/exiftool/files/exiftool-${ExifVersion}_64.zip/download",
+            "https://exiftool.org/exiftool-${ExifVersion}_64.zip"
+        )
+        foreach ($Url in $Urls) {
+            try {
+                Invoke-WebRequest $Url -OutFile $ExifToolZip -UseBasicParsing -UserAgent "Wget"
+                break
+            } catch {
+                Write-Warning "Download from $Url failed: $_"
+                Remove-Item -Force $ExifToolZip -ErrorAction SilentlyContinue
+            }
+        }
+        if (-not (Test-Path $ExifToolZip)) { throw "Could not download ExifTool $ExifVersion" }
     }
 }
 Remove-Item -Recurse -Force build\exiftool -ErrorAction SilentlyContinue
