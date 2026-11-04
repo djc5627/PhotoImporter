@@ -2,6 +2,11 @@
 
 All notable changes to Photo Importer. Each version's section becomes the notes of its [GitHub release](https://github.com/djc5627/PhotoImporter/releases).
 
+## [1.3.0] - 2026-11-04
+
+### Added
+- **Photos grouped by day.** Thumbnails sit under a header for each day they were taken, newest day first, showing the date and how many of that day's photos are selected, e.g. *Tuesday, October 20, 2026 · 5 photos · 4 selected*. Click a header to select every photo from that day, or to deselect them all if they already are. A round tick on the header shows whether all, some or none of the day is selected.
+
 ## [1.2.0] - 2026-11-04
 
 More room for your photos.
