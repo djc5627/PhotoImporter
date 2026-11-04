@@ -68,6 +68,12 @@ def window(qtbot, tmp_path, library, reader, monkeypatch):
     monkeypatch.setattr(win, "_ask_camera", ask_camera)
     win.confirmations = []
     monkeypatch.setattr(win, "_confirm", lambda text: win.confirmations.append(text) or True)
+    win.import_confirmations = []
+    monkeypatch.setattr(
+        win,
+        "_confirm_import",
+        lambda breakdown, target: win.import_confirmations.append((breakdown, target)) or True,
+    )
     monkeypatch.setattr(win, "_notify", win.notices.append)
     monkeypatch.setattr(win, "_show_error", win.errors.append)
     return win
@@ -604,3 +610,73 @@ def test_update_check_failures_and_opt_out_are_quiet(qtbot, tmp_path):
     make_window(qtbot, tmp_path, lambda: calls.append(1))
     qtbot.wait(100)
     assert calls == []
+
+
+def test_import_confirmation_lists_cameras_and_categories(qtbot, window, card, library):
+    grid = find_with_sony_and_one_imported(qtbot, window, card, library)
+    window.include_older_check.click()  # R0000001 pair
+    mouse_click(qtbot, grid, "DSC00001")  # deselect the Sony photo...
+    mouse_click(qtbot, grid, "DSC00001")  # ...and select it again
+    view(grid, "Probably deleted")
+    window.description_edit.setText("Walk")
+
+    with qtbot.waitSignal(window.import_done, timeout=10_000):
+        window.import_button.click()
+
+    breakdown, target = window.import_confirmations[-1]
+    assert target == window.target_dir()
+    assert {c.name: dict(c.counts) for c in breakdown.cameras} == {
+        "DSC-RX100M7": {"new": 1},
+        "RICOH GR III": {"older": 1},
+    }
+    assert breakdown.hidden == 1  # the Sony photo isn't in the "Probably deleted" view
+    assert dict(breakdown.not_importing) == {"already": 1}
+
+
+def test_cancelling_the_import_confirmation_keeps_the_selection(qtbot, window, card, monkeypatch):
+    monkeypatch.setattr(window, "_confirm_import", lambda breakdown, target: False)
+    window.source_edit.setText(str(card))
+    with qtbot.waitSignal(window.plan_ready, timeout=10_000):
+        window.find_button.click()
+    window.description_edit.setText("Walk")
+
+    window.import_button.click()
+
+    assert not window.target_dir().exists()
+    assert window.plan is not None and window.import_button.isEnabled()
+
+
+def test_import_dialog_shows_only_columns_with_photos(qtbot, tmp_path):
+    from collections import Counter
+
+    from photoimporter.core.planner import CameraBreakdown, ImportBreakdown
+    from photoimporter.ui.import_dialog import ImportConfirmDialog
+
+    breakdown = ImportBreakdown(
+        [
+            CameraBreakdown(
+                "Ricoh GR III", "ricoh\\jpg, ricoh\\raw", Counter(new=38, recent_deleted=3, older=2)
+            ),
+            CameraBreakdown("RX100", "sony rx100\\jpg", Counter(new=4)),
+        ],
+        files=75,
+        hidden=12,
+        not_importing=Counter(new=5, already=120),
+    )
+    dialog = ImportConfirmDialog(breakdown, tmp_path / "2026.11.04 Fall Colors")
+    qtbot.addWidget(dialog)
+    table = dialog.table
+
+    headers = [table.horizontalHeaderItem(c).text() for c in range(table.columnCount())]
+    assert headers == ["Camera", "Saved to", "New", "Recently deleted", "Probably deleted", "Total"]
+    rows = [
+        [table.item(r, c).text() for c in range(table.columnCount())]
+        for r in range(table.rowCount())
+    ]
+    assert rows[-1] == ["Total", "", "42", "3", "2", "47"]
+    assert rows[1][3] == "–"
+    assert dialog.title_label.text() == "<b>Import 47 photos (75 files)?</b>"
+    assert dialog.hidden_label.text() == "⚠ 12 of these photos aren’t in the current view."
+    assert dialog.not_importing_label.text() == (
+        "Not importing: 5 new photos you deselected, 120 already imported."
+    )

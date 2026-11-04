@@ -46,11 +46,12 @@ from ..core.deleter import DeleteResult, Recycler, default_recycler, delete_from
 from ..core.exif import ExifToolReader, MetadataReader
 from ..core.indexer import ScanResult, scan_library
 from ..core.models import Camera
-from ..core.planner import CameraGroup, ImportPlan, build_plan
+from ..core.planner import CameraGroup, ImportBreakdown, ImportPlan, build_plan, import_breakdown
 from ..core.thumbnails import ExifToolThumbnails, ThumbnailSource, group_shots
 from ..core.updates import Release, newer_release
 from .camera_dialog import CameraDialog
 from .card_watcher import CardWatcher
+from .import_dialog import ImportConfirmDialog
 from .settings_dialog import SettingsDialog
 from .thumbnail_grid import ThumbnailGrid
 from .workers import BackgroundCall, ReportProgress, Worker
@@ -711,7 +712,8 @@ class MainWindow(QMainWindow):
             group.camera, group.registered = camera, True
             self._refresh_plan_view()
         plan.target_dir = target
-        if not self._confirm(f"Copy {self._amount(*self._import_counts())} into\n{target}?"):
+        shown = {p.path for shot in self.grid.shots() for p in shot.photos}
+        if not self._confirm_import(import_breakdown(plan, shown), target):
             return
         self.grid.stop()  # don't compete with the copy for the card
         db_path, cancel = self.db_path, self._cancel
@@ -819,6 +821,10 @@ class MainWindow(QMainWindow):
             self,
         )
         return dialog.camera() if dialog.exec() == CameraDialog.DialogCode.Accepted else None
+
+    def _confirm_import(self, breakdown: ImportBreakdown, target: Path) -> bool:
+        dialog = ImportConfirmDialog(breakdown, target, self)
+        return dialog.exec() == ImportConfirmDialog.DialogCode.Accepted
 
     def _confirm(self, text: str) -> bool:
         answer = QMessageBox.question(self, "Photo Importer", text)

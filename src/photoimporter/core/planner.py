@@ -232,3 +232,79 @@ def build_plan(
         else:
             group.new.append(photo)
     return ImportPlan(source, target_dir, list(groups.values()))
+
+
+@dataclass
+class CameraBreakdown:
+    name: str
+    saved_to: str
+    counts: Counter[str]  # pictures per status
+
+    @property
+    def total(self) -> int:
+        return sum(self.counts.values())
+
+
+@dataclass
+class ImportBreakdown:
+    """What an import will copy, per camera and status, for the confirmation window.
+
+    Counts are pictures: a RAW+JPG pair counts once.
+    """
+
+    cameras: list[CameraBreakdown]
+    files: int
+    hidden: int  # pictures being imported that aren't in the current view
+    not_importing: Counter[str]  # pictures left out, per status
+
+    @property
+    def totals(self) -> Counter[str]:
+        result: Counter[str] = Counter()
+        for camera in self.cameras:
+            result.update(camera.counts)
+        return result
+
+    @property
+    def pictures(self) -> int:
+        return sum(c.total for c in self.cameras)
+
+    @property
+    def statuses(self) -> list[str]:
+        """The statuses that have something to import, in display order."""
+        totals = self.totals
+        return [s for s in STATUSES if totals[s]]
+
+
+def _shot_status(photos: list[PhotoFile], statuses: dict[Path, str]) -> str:
+    found = {statuses[p.path] for p in photos}
+    return next(s for s in STATUSES if s in found)
+
+
+def import_breakdown(plan: ImportPlan, shown: set[Path] | None = None) -> ImportBreakdown:
+    """Summarise what `plan` will import. `shown`: card paths visible in the grid."""
+    from .thumbnails import group_shots  # here to avoid an import cycle
+
+    statuses = plan.statuses()
+    cameras, files, hidden = [], 0, 0
+    copying: set[Path] = set()
+    for group in plan.groups:
+        to_copy = plan.to_copy(group)
+        if not to_copy:
+            continue
+        files += len(to_copy)
+        copying.update(p.path for p in to_copy)
+        counts: Counter[str] = Counter()
+        for shot in group_shots(to_copy):
+            counts[_shot_status(shot.photos, statuses)] += 1
+            if shown is not None and not any(p.path in shown for p in shot.photos):
+                hidden += 1
+        cam = group.camera
+        kinds = sorted({p.kind for p in to_copy})
+        saved_to = ", ".join(str(Path(cam.folder_name, cam.subdir_for(k))) for k in kinds)
+        cameras.append(CameraBreakdown(cam.nickname, saved_to, counts))
+
+    left_out = [p for p in plan.photos() if p.path not in copying]
+    not_importing: Counter[str] = Counter()
+    for shot in group_shots(left_out):
+        not_importing[_shot_status(shot.photos, statuses)] += 1
+    return ImportBreakdown(cameras, files, hidden, not_importing)

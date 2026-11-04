@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from conftest import RICOH, SONY, make_file
 
 from photoimporter.core.cards import scan_source
@@ -118,3 +120,29 @@ def test_older_rule_is_per_camera(tmp_path, card, reader):
     )
 
     assert (plan.new_count, plan.older_count) == (3, 0)
+
+
+def test_import_breakdown_counts_pictures_per_camera_and_status(tmp_path, card, reader):
+    from photoimporter.core.planner import import_breakdown
+
+    make_file(card / "DCIM" / "100MSDCF" / "DSC00001.JPG", b"sony-jpg")
+    make_file(card / "DCIM" / "100MSDCF" / "DSC00001.ARW", b"sony-raw")
+    photos = scan_source(card, reader)
+    r2 = next(p for p in photos if p.filename == "R0000002.JPG")
+    r1 = [p for p in photos if p.filename.startswith("R0000001")]
+    plan = build_plan(card, tmp_path / "t", photos, {r2.key}, {}, deleted_keys={p.key for p in r1})
+    plan.include_deleted = True  # the R0000001 pair
+    sony = [p.path for p in photos if p.filename.startswith("DSC")]
+
+    breakdown = import_breakdown(plan, shown=set(sony))
+
+    assert [(c.name, c.total, dict(c.counts)) for c in breakdown.cameras] == [
+        ("DSC-RX100M7", 1, {"new": 1}),
+        ("RICOH GR III", 1, {"deleted": 1}),
+    ]
+    assert breakdown.cameras[1].saved_to == str(Path("ricoh gr iii", "jpg")) + ", " + str(
+        Path("ricoh gr iii", "raw")
+    )
+    assert (breakdown.pictures, breakdown.files, breakdown.hidden) == (2, 4, 1)
+    assert breakdown.statuses == ["new", "deleted"]
+    assert dict(breakdown.not_importing) == {"already": 1}
