@@ -5,11 +5,12 @@ from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThreadPool, Signal
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtCore import Qt, QThreadPool, QUrl, Signal
+from PySide6.QtGui import QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
     QFileDialog,
+    QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -28,10 +29,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .. import __version__
 from ..core.cameras import LibraryLayout, apply_camera_suggestions
 from ..core.cards import detect_cards, scan_source
 from ..core.config import (
     apply_exiftool_setting,
+    check_for_updates,
     date_format,
     find_on_insert,
     new_import_folder,
@@ -44,11 +47,12 @@ from ..core.indexer import ScanResult, scan_library
 from ..core.models import Camera
 from ..core.planner import CameraGroup, ImportPlan, build_plan
 from ..core.thumbnails import ExifToolThumbnails, ThumbnailSource
+from ..core.updates import Release, newer_release
 from .camera_dialog import CameraDialog
 from .card_watcher import CardWatcher
 from .settings_dialog import SettingsDialog
 from .thumbnail_grid import ThumbnailGrid
-from .workers import ReportProgress, Worker
+from .workers import BackgroundCall, ReportProgress, Worker
 
 
 def _photos(n: int) -> str:
@@ -59,6 +63,7 @@ class MainWindow(QMainWindow):
     plan_ready = Signal(object)
     import_done = Signal(object)
     task_failed = Signal(str)
+    update_checked = Signal(object)  # Release or None
 
     def __init__(
         self,
@@ -67,6 +72,7 @@ class MainWindow(QMainWindow):
         card_detector: Callable[[], list[Path]] = detect_cards,
         card_poll_ms: int = 2000,
         thumbnail_factory: Callable[[], ThumbnailSource] = ExifToolThumbnails,
+        update_checker: Callable[[], Release | None] | None = newer_release,
     ):
         super().__init__()
         self.db_path = db_path
@@ -86,6 +92,7 @@ class MainWindow(QMainWindow):
         self.resize(1000, 820)
         central = QWidget()
         layout = QVBoxLayout(central)
+        layout.addWidget(self._build_update_bar())
         layout.addWidget(self._build_library_box())
         layout.addWidget(self._build_target_box())
         layout.addWidget(self._build_source_box())
@@ -101,7 +108,38 @@ class MainWindow(QMainWindow):
         self.card_watcher.removed.connect(self.on_card_removed)
         self.card_watcher.start()
 
+        self.update_checker = update_checker
+        self._update_call: BackgroundCall | None = None
+        if update_checker is not None and check_for_updates(self.db):
+            self.check_for_update()
+
     # Layout
+
+    def _build_update_bar(self) -> QFrame:
+        self.update_bar = QFrame()
+        self.update_bar.setObjectName("updateBar")
+        self.update_bar.setStyleSheet(
+            "#updateBar { background: #e6f0fb; border: 1px solid #9cc1e8; border-radius: 4px; }"
+        )
+        row = QHBoxLayout(self.update_bar)
+        row.setContentsMargins(10, 4, 4, 4)
+        self.update_label = QLabel()
+        self.update_download_button = QPushButton("What's new && download")
+        self.update_download_button.clicked.connect(self._open_update)
+        self.update_skip_button = QPushButton("Skip this version")
+        self.update_skip_button.clicked.connect(self._skip_update)
+        self.update_close_button = QPushButton("Not now")
+        self.update_close_button.clicked.connect(self.update_bar.hide)
+        row.addWidget(self.update_label, stretch=1)
+        for button in (
+            self.update_download_button,
+            self.update_skip_button,
+            self.update_close_button,
+        ):
+            row.addWidget(button)
+        self.update_bar.hide()
+        self.available_update: Release | None = None
+        return self.update_bar
 
     def _build_library_box(self) -> QGroupBox:
         box = QGroupBox("Photo library")
@@ -265,12 +303,43 @@ class MainWindow(QMainWindow):
             self._refresh_library_label()
             self._refresh_target_preview()
 
+    # Updates
+
+    def check_for_update(self) -> None:
+        """Look for a newer release in the background; show a bar if there is one."""
+        call = BackgroundCall(self.update_checker)
+        call.signals.finished.connect(self._on_update_checked)
+        call.signals.failed.connect(lambda _message: self.update_checked.emit(None))  # offline
+        self._update_call = call
+        QThreadPool.globalInstance().start(call)
+
+    def _on_update_checked(self, release: Release | None) -> None:
+        if release is not None and release.version != self.db.get_setting("skipped_version"):
+            self.available_update = release
+            self.update_label.setText(
+                f"<b>Photo Importer {release.version}</b> is available (you have {__version__})."
+            )
+            self.update_bar.show()
+        self.update_checked.emit(release)
+
+    def _open_update(self) -> None:
+        if self.available_update is not None:
+            QDesktopServices.openUrl(QUrl(self.available_update.page_url))
+
+    def _skip_update(self) -> None:
+        if self.available_update is not None:
+            self.db.set_setting("skipped_version", self.available_update.version)
+        self.update_bar.hide()
+
+    # Settings
+
     def open_settings(self) -> None:
         if self._exec_settings():
             self._apply_settings()
 
     def _exec_settings(self) -> bool:
-        return SettingsDialog(self.db, self).exec() == SettingsDialog.DialogCode.Accepted
+        dialog = SettingsDialog(self.db, self, self.update_checker or newer_release)
+        return dialog.exec() == SettingsDialog.DialogCode.Accepted
 
     def _apply_settings(self) -> None:
         apply_exiftool_setting(self.db)

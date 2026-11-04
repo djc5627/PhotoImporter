@@ -43,6 +43,7 @@ def window(qtbot, tmp_path, library, reader, monkeypatch):
         card_detector=lambda: win.cards,
         card_poll_ms=50,
         thumbnail_factory=FakeThumbnails,
+        update_checker=None,
     )
     qtbot.addWidget(win)
     win.cards = []
@@ -388,3 +389,56 @@ def test_card_insert_can_just_fill_in_the_source(qtbot, window, card):
     qtbot.waitUntil(lambda: window.source_edit.text() == str(card), timeout=5_000)
     assert window.plan is None
     assert window.status_label.text() == f"Card inserted: {card}. Click Find new photos."
+
+
+def make_window(qtbot, tmp_path, update_checker):
+    win = MainWindow(
+        tmp_path / "ui.db",
+        card_detector=lambda: [],
+        thumbnail_factory=FakeThumbnails,
+        update_checker=update_checker,
+    )
+    qtbot.addWidget(win)
+    return win
+
+
+def test_update_bar_offers_a_newer_release(qtbot, tmp_path, monkeypatch):
+    from photoimporter.core.updates import Release
+
+    opened = []
+    monkeypatch.setattr("PySide6.QtGui.QDesktopServices.openUrl", lambda url: opened.append(url))
+    release = Release("9.0.0", "https://github.com/x/y/releases/tag/v9.0.0", None)
+    win = make_window(qtbot, tmp_path, lambda: release)
+    qtbot.waitUntil(lambda: win.update_bar.isVisibleTo(win), timeout=5_000)
+    assert "Photo Importer 9.0.0" in win.update_label.text()
+
+    win.update_download_button.click()
+    assert opened[0].toString() == release.page_url
+
+    win.update_skip_button.click()
+    assert not win.update_bar.isVisibleTo(win)
+    assert win.db.get_setting("skipped_version") == "9.0.0"
+    win.close()
+
+    again = make_window(qtbot, tmp_path, lambda: release)
+    with qtbot.waitSignal(again.update_checked, timeout=5_000):
+        pass
+    assert not again.update_bar.isVisibleTo(again)  # skipped version stays quiet
+
+
+def test_update_check_failures_and_opt_out_are_quiet(qtbot, tmp_path):
+    def offline():
+        raise OSError("no network")
+
+    win = make_window(qtbot, tmp_path, offline)
+    with qtbot.waitSignal(win.update_checked, timeout=5_000) as signal:
+        pass
+    assert signal.args == [None]
+    assert not win.update_bar.isVisibleTo(win)
+    win.db.set_setting("check_updates", "0")
+    win.close()
+
+    calls = []
+    make_window(qtbot, tmp_path, lambda: calls.append(1))
+    qtbot.wait(100)
+    assert calls == []

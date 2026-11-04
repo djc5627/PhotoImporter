@@ -49,6 +49,11 @@ def find_on_insert(db: Database) -> bool:
     return db.get_setting("find_on_insert") != "0"
 
 
+def check_for_updates(db: Database) -> bool:
+    """Whether the app looks for a newer release when it starts."""
+    return db.get_setting("check_updates") != "0"
+
+
 def exiftool_setting(db: Database) -> str | None:
     return db.get_setting("exiftool_path") or None
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
@@ -25,8 +26,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .. import __version__
 from ..core.config import (
     DATE_FORMAT_PRESETS,
+    check_for_updates,
     date_format,
     exiftool_setting,
     find_on_insert,
@@ -37,6 +40,7 @@ from ..core.config import (
 from ..core.db import Database
 from ..core.exif import ExifToolNotFound, find_exiftool
 from ..core.models import Camera, safe_folder_name
+from ..core.updates import Release, newer_release
 
 _CAMERA_COLUMNS = ["Camera", "Name", "Camera folder", "JPG subfolder", "RAW subfolder"]
 
@@ -64,9 +68,15 @@ def exiftool_status(path: str | None) -> str:
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, db: Database, parent: QWidget | None = None):
+    def __init__(
+        self,
+        db: Database,
+        parent: QWidget | None = None,
+        update_checker: Callable[[], Release | None] = newer_release,
+    ):
         super().__init__(parent)
         self.db = db
+        self.update_checker = update_checker
         self.setWindowTitle("Settings")
         self.resize(760, 420)
         layout = QVBoxLayout(self)
@@ -121,7 +131,35 @@ class SettingsDialog(QDialog):
         self.exiftool_status.setStyleSheet("color: gray")
         form.addRow("ExifTool", self._row(self.exiftool_edit, browse_exiftool))
         form.addRow("", self.exiftool_status)
+
+        self.updates_check = QCheckBox("Check for a new version when the app starts")
+        self.updates_check.setChecked(check_for_updates(self.db))
+        self.check_now_button = QPushButton("Check now")
+        self.check_now_button.clicked.connect(self._check_now)
+        form.addRow(
+            f"Updates (v{__version__})", self._row(self.updates_check, self.check_now_button)
+        )
+        self.update_status = QLabel()
+        self.update_status.setOpenExternalLinks(True)
+        self.update_status.setWordWrap(True)
+        form.addRow("", self.update_status)
         return page
+
+    def _check_now(self) -> None:
+        self.update_status.setText("Checking…")
+        self.update_status.repaint()
+        try:
+            release = self.update_checker()
+        except OSError as exc:
+            self.update_status.setText(f"Couldn't check for updates: {exc}")
+            return
+        if release is None:
+            self.update_status.setText(f"You have the latest version ({__version__}).")
+        else:
+            self.update_status.setText(
+                f'Version {release.version} is available: <a href="{release.page_url}">'
+                "what's new and download</a>."
+            )
 
     @staticmethod
     def _row(*widgets: QWidget) -> QWidget:
@@ -256,6 +294,7 @@ class SettingsDialog(QDialog):
         self.db.set_setting("date_format", self.date_combo.currentText().strip())
         self.db.set_setting("find_on_insert", "1" if self.find_on_insert_check.isChecked() else "0")
         self.db.set_setting("exiftool_path", self.exiftool_edit.text().strip())
+        self.db.set_setting("check_updates", "1" if self.updates_check.isChecked() else "0")
         kept = self.edited_cameras()
         for key in set(self.db.cameras()) - {(c.make, c.model) for c in kept}:
             self.db.delete_camera(*key)

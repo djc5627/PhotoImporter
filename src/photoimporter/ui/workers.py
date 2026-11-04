@@ -13,6 +13,26 @@ class WorkerSignals(QObject):
     failed = Signal(str)
 
 
+class BackgroundCall(QRunnable):
+    """Runs `func()` on the thread pool without marking the window busy.
+
+    Emits `finished` with the result, or `failed` with the error message.
+    """
+
+    def __init__(self, func: Callable[[], object]):
+        super().__init__()
+        self.func = func
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        try:
+            result = self.func()
+        except Exception as exc:
+            self.signals.failed.emit(str(exc) or type(exc).__name__)
+        else:
+            self.signals.finished.emit(result)
+
+
 class Worker(QRunnable):
     """Runs `task(report_progress)` on the thread pool; results come back as signals."""
 

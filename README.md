@@ -5,16 +5,30 @@ Imports only the new photos from camera SD cards into dated, per-camera folders
 
 ## Install (Windows)
 
-Download `PhotoImporter-<version>-setup.exe` from the latest successful **Test and build** run on
-GitHub (Actions tab → run → *Artifacts*) and run it. It installs for your user only (no admin
-rights), adds Photo Importer to the Start menu (and optionally the desktop), and bundles ExifTool.
-Your settings and library index are kept in `%APPDATA%\PhotoImporter`, so they carry over from the
-development version and survive reinstalling or uninstalling.
+Download `PhotoImporter-<version>-setup.exe` from the
+[latest release](https://github.com/djc5627/PhotoImporter/releases/latest) and run it. It installs
+for your user only (no admin rights), adds Photo Importer to the Start menu (and optionally the
+desktop), and bundles ExifTool. Your settings and library index are kept in
+`%APPDATA%\PhotoImporter`, so they survive updates, reinstalling and uninstalling.
 
 The `-portable.zip` holds the same app without an installer: unzip anywhere and run
 `PhotoImporter.exe`.
 
-To build it yourself: `powershell -ExecutionPolicy Bypass -File packaging\build.ps1` (needs
+**Updating:** the app shows a bar when a new version is out (turn this off in Settings). Click
+*What's new & download*, run the new installer, and it replaces the old version in place. What
+changed in each version is in [CHANGELOG.md](CHANGELOG.md) and on each release page.
+
+## Releasing a new version
+
+1. Set the new version in `src/photoimporter/__init__.py` (e.g. `1.0.1`).
+2. Add a `## [1.0.1] - YYYY-MM-DD` section at the top of `CHANGELOG.md`.
+3. Merge to `main`, then tag it: `git tag v1.0.1 && git push origin v1.0.1`.
+
+The **Test and build** workflow then builds and tests the installer and publishes the release,
+using the changelog section as its notes. It refuses if the tag, `__version__` and the changelog
+don't agree. Every push also builds the installer as a downloadable workflow artifact.
+
+To build locally instead: `powershell -ExecutionPolicy Bypass -File packaging\build.ps1` (needs
 [uv](https://docs.astral.sh/uv/); the installer also needs [Inno Setup 6](https://jrsoftware.org/isinfo.php)).
 
 ## Development setup
