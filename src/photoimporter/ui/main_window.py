@@ -67,6 +67,11 @@ class ElidedLabel(QLabel):
     Unlike a plain QLabel, a long text doesn't force the window to be wider.
     """
 
+    def __init__(self, text: str = "", elide: Qt.TextElideMode = Qt.TextElideMode.ElideRight):
+        super().__init__(text)
+        self.elide = elide
+        self.setToolTip(text)
+
     def setText(self, text: str) -> None:  # noqa: N802 (Qt name)
         super().setText(text)
         self.setToolTip(text)
@@ -77,7 +82,7 @@ class ElidedLabel(QLabel):
     def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802
         painter = QPainter(self)
         metrics = self.fontMetrics()
-        text = metrics.elidedText(self.text(), Qt.TextElideMode.ElideRight, self.width())
+        text = metrics.elidedText(self.text(), self.elide, self.width())
         painter.drawText(self.rect(), int(self.alignment()), text)
 
 
@@ -180,7 +185,8 @@ class MainWindow(QMainWindow):
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(6)
 
-        self.library_label = QLabel()
+        # Cut off in the middle, keeping the drive and the photo count, if it doesn't fit.
+        self.library_label = ElidedLabel(elide=Qt.TextElideMode.ElideMiddle)
         self.change_root_button = QPushButton("Change…")
         self.change_root_button.clicked.connect(self.choose_photos_root)
         self.rescan_button = QPushButton("Rescan library")

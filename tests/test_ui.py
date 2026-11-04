@@ -196,10 +196,14 @@ def test_include_button_is_off_when_every_photo_is_new(qtbot, window, card):
     assert "every photo on this card is new" in window.include_button.toolTip()
 
 
-def test_long_status_does_not_widen_the_window(qtbot, window):
+def test_long_texts_do_not_widen_the_window(qtbot, window, tmp_path):
+    width = window.minimumSizeHint().width()
     window.status_label.setText("x" * 1000)
-    assert window.minimumSizeHint().width() < 1000
+    window.db.set_setting("photos_root", str(tmp_path / ("long folder name " * 30)))
+    window._refresh_library_label()
+    assert window.minimumSizeHint().width() == width
     assert window.status_label.toolTip() == "x" * 1000
+    assert "long folder name" in window.library_label.toolTip()
 
 
 def test_first_launch_size_fits_the_screen_and_is_centred(window):
