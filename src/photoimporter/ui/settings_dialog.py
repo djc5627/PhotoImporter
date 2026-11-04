@@ -8,6 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -22,13 +23,16 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from .. import __version__
 from ..core.config import (
+    ACCENTS,
     DATE_FORMAT_PRESETS,
+    accent_choice,
     appearance,
     check_for_updates,
     date_format,
@@ -42,9 +46,54 @@ from ..core.db import Database
 from ..core.exif import ExifToolNotFound, find_exiftool
 from ..core.models import Camera, safe_folder_name
 from ..core.updates import Release, newer_release
-from .theme import colors, muted
+from .theme import accent_color, colors, muted
 
 APPEARANCE_LABELS = {"system": "Same as Windows", "light": "Light", "dark": "Dark"}
+
+
+class AccentPicker(QWidget):
+    """A row of round colour swatches; the first is Windows' own accent colour."""
+
+    def __init__(self, choice: str, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.choice = choice
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        self.buttons: dict[str, QToolButton] = {}
+        group = QButtonGroup(self)
+        for name in ("system", *ACCENTS):
+            button = QToolButton()
+            button.setCheckable(True)
+            button.setFixedSize(26, 26)
+            button.setToolTip(self.label(name))
+            color = accent_color(name).name()
+            button.setStyleSheet(
+                f"QToolButton {{ background: {color}; border: 2px solid {color};"
+                " border-radius: 13px; }"
+                "QToolButton:checked { border: 3px solid palette(window-text); }"
+            )
+            if name == "system":
+                button.setText("W")
+                button.setStyleSheet(button.styleSheet() + "QToolButton { color: white; }")
+            button.setChecked(name == choice)
+            button.clicked.connect(lambda _=False, name=name: self._choose(name))
+            group.addButton(button)
+            layout.addWidget(button)
+            self.buttons[name] = button
+        self.name_label = muted(QLabel(self.label(choice)))
+        layout.addSpacing(6)
+        layout.addWidget(self.name_label)
+        layout.addStretch(1)
+
+    @staticmethod
+    def label(name: str) -> str:
+        return "Same as Windows" if name == "system" else name.capitalize()
+
+    def _choose(self, name: str) -> None:
+        self.choice = name
+        self.name_label.setText(self.label(name))
+
 
 _CAMERA_COLUMNS = ["Camera", "Name", "Camera folder", "JPG subfolder", "RAW subfolder"]
 
@@ -130,6 +179,9 @@ class SettingsDialog(QDialog):
             self.appearance_combo.addItem(label, value)
         self.appearance_combo.setCurrentIndex(self.appearance_combo.findData(appearance(self.db)))
         form.addRow("Appearance", self.appearance_combo)
+
+        self.accent_picker = AccentPicker(accent_choice(self.db))
+        form.addRow("Accent colour", self.accent_picker)
 
         self.exiftool_edit = QLineEdit(exiftool_setting(self.db) or "")
         self.exiftool_edit.setPlaceholderText("Automatic")
@@ -305,6 +357,7 @@ class SettingsDialog(QDialog):
         self.db.set_setting("find_on_insert", "1" if self.find_on_insert_check.isChecked() else "0")
         self.db.set_setting("exiftool_path", self.exiftool_edit.text().strip())
         self.db.set_setting("appearance", self.appearance_combo.currentData())
+        self.db.set_setting("accent", self.accent_picker.choice)
         self.db.set_setting("check_updates", "1" if self.updates_check.isChecked() else "0")
         kept = self.edited_cameras()
         for key in set(self.db.cameras()) - {(c.make, c.model) for c in kept}:

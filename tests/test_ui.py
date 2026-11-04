@@ -889,7 +889,7 @@ def light_afterwards(qapp):
     yield
     from photoimporter.ui.theme import apply_appearance
 
-    apply_appearance(qapp, "light")
+    apply_appearance(qapp, "light", "blue")
 
 
 def test_dark_appearance_restyles_the_window(qtbot, window, qapp, light_afterwards, monkeypatch):
@@ -932,3 +932,32 @@ def test_appearance_is_saved_from_settings(qtbot, db, light_afterwards):
     assert appearance(db) == "dark"
     db.set_setting("appearance", "purple")
     assert appearance(db) == "system"  # unknown values fall back
+
+
+def test_accent_colour_is_chosen_in_settings_and_used(qtbot, window, qapp, light_afterwards):
+    from PySide6.QtGui import QPalette
+
+    from photoimporter.core.config import ACCENTS, accent_choice
+    from photoimporter.ui.settings_dialog import SettingsDialog
+    from photoimporter.ui.theme import accent
+
+    assert accent_choice(window.db) == "blue"
+    assert accent().name() == ACCENTS["blue"]
+
+    dialog = SettingsDialog(window.db, None, lambda: None)
+    qtbot.addWidget(dialog)
+    assert dialog.accent_picker.buttons["blue"].isChecked()
+    dialog.accent_picker.buttons["teal"].click()
+    assert dialog.accent_picker.name_label.text() == "Teal"
+    dialog.accept()
+    window._apply_settings()
+
+    assert accent().name() == ACCENTS["teal"]
+    assert ACCENTS["teal"] in window.import_button.styleSheet()
+    assert qapp.palette().color(QPalette.ColorRole.Highlight).name() == ACCENTS["teal"]
+
+    window.db.set_setting("accent", "system")
+    window._apply_settings()
+    assert accent_choice(window.db) == "system"
+    window.db.set_setting("accent", "chartreuse")
+    assert accent_choice(window.db) == "blue"  # unknown values fall back

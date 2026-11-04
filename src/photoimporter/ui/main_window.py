@@ -34,6 +34,7 @@ from .. import __version__
 from ..core.cameras import LibraryLayout, apply_camera_suggestions
 from ..core.cards import detect_cards, scan_source
 from ..core.config import (
+    accent_choice,
     appearance,
     apply_exiftool_setting,
     check_for_updates,
@@ -142,7 +143,7 @@ class MainWindow(QMainWindow):
         self._restore_geometry()
         app = QApplication.instance()
         if isinstance(app, QApplication):
-            apply_appearance(app, appearance(self.db))
+            apply_appearance(app, appearance(self.db), accent_choice(self.db))
             # Windows switching between light and dark ("Same as Windows").
             app.styleHints().colorSchemeChanged.connect(self._on_color_scheme_changed)
         self._apply_styles()
@@ -185,7 +186,7 @@ class MainWindow(QMainWindow):
         if self._closed or not isinstance(app, QApplication):
             return
         if appearance(self.db) == "system":
-            apply_appearance(app, "system")
+            apply_appearance(app, "system", accent_choice(self.db))
         # Once the style has updated the palette.
         QTimer.singleShot(0, self._restyle)
 
@@ -446,7 +447,7 @@ class MainWindow(QMainWindow):
         apply_exiftool_setting(self.db)
         app = QApplication.instance()
         if isinstance(app, QApplication):
-            apply_appearance(app, appearance(self.db))
+            apply_appearance(app, appearance(self.db), accent_choice(self.db))
             self._restyle()
         self._refresh_library_label()
         self._refresh_target_preview()

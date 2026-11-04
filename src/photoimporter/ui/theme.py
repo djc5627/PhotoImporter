@@ -16,6 +16,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QGuiApplication, QPalette
 from PySide6.QtWidgets import QApplication, QWidget
 
+from ..core.config import ACCENTS, DEFAULT_ACCENT
+
 
 @dataclass(frozen=True)
 class Colors:
@@ -64,12 +66,24 @@ DARK = Colors(
 )
 
 
-DEFAULT_ACCENT = "#1e88e5"
+_accent = QColor(ACCENTS[DEFAULT_ACCENT])
+_system_accent: QColor | None = None  # Windows' accent colour, read before we change it
 
 
 def accent() -> QColor:
     """The colour of selection borders, day-header ticks and the Import button."""
-    return QColor(DEFAULT_ACCENT)
+    return QColor(_accent)
+
+
+def system_accent() -> QColor:
+    """Windows' accent colour (Qt's default blue where there is none)."""
+    if _system_accent is not None:
+        return QColor(_system_accent)
+    return QGuiApplication.palette().color(QPalette.ColorRole.Accent)
+
+
+def accent_color(choice: str) -> QColor:
+    return system_accent() if choice == "system" else QColor(ACCENTS.get(choice, "#1e88e5"))
 
 
 def is_dark(palette: QPalette | None = None) -> bool:
@@ -129,17 +143,28 @@ def _native_dark_mode(app: QApplication) -> bool:
     return app.style().name().lower() == "windows11"
 
 
-def apply_appearance(app: QApplication, mode: str) -> None:
-    """Switch the whole app to `mode`: "system", "light" or "dark"."""
+def apply_appearance(app: QApplication, mode: str, accent_choice: str = DEFAULT_ACCENT) -> None:
+    """Switch the whole app to `mode` ("system", "light" or "dark") and an accent colour."""
+    global _accent, _system_accent
+    if _system_accent is None:
+        _system_accent = QGuiApplication.palette().color(QPalette.ColorRole.Accent)
     schemes = {"light": Qt.ColorScheme.Light, "dark": Qt.ColorScheme.Dark}
     app.styleHints().setColorScheme(schemes.get(mode, Qt.ColorScheme.Unknown))
     if _native_dark_mode(app):
-        return
-    if mode == "system":
-        dark = app.styleHints().colorScheme() == Qt.ColorScheme.Dark
+        palette = QPalette()  # only the accent roles; the style supplies the rest
     else:
-        dark = mode == "dark"
-    if dark or app.style().name().lower() == "fusion":
-        if app.style().name().lower() != "fusion":
+        if mode == "system":
+            dark = app.styleHints().colorScheme() == Qt.ColorScheme.Dark
+        else:
+            dark = mode == "dark"
+        if app.style().name().lower() != "fusion" and dark:
             app.setStyle("Fusion")
-        app.setPalette(dark_palette() if dark else app.style().standardPalette())
+        if app.style().name().lower() == "fusion":
+            palette = dark_palette() if dark else app.style().standardPalette()
+        else:
+            palette = QPalette()
+    _accent = accent_color(accent_choice)
+    for role in (QPalette.ColorRole.Highlight, QPalette.ColorRole.Accent):
+        palette.setColor(role, _accent)
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor("white"))
+    app.setPalette(palette)
