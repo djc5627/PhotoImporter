@@ -163,14 +163,20 @@ class MainWindow(QMainWindow):
                 "New JPG",
                 "New RAW",
                 "Already imported",
+                "Recently deleted",
                 "Deleted",
                 "Probably deleted",
             ]
         )
         header_item = self.plan_tree.headerItem()
-        header_item.setToolTip(5, "Imported before, then deleted from your library")
         header_item.setToolTip(
-            6, "Older than the newest library photo from this camera, so most likely deleted"
+            5,
+            "Imported before, then deleted, and newer than any photo from this camera\n"
+            "still in your library (e.g. you deleted your latest import folder)",
+        )
+        header_item.setToolTip(6, "Imported before, then deleted from your library")
+        header_item.setToolTip(
+            7, "Older than the newest library photo from this camera, so most likely deleted"
         )
         self.plan_tree.setRootIsDecorated(False)
         header = self.plan_tree.header()
@@ -179,6 +185,12 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.plan_tree)
 
+        self.include_recent_deleted_check = QCheckBox()
+        self.include_recent_deleted_check.setToolTip(
+            "Photos you deleted that are newer than any photo from the same camera still in\n"
+            "your library, for example after deleting your latest import folder.\n"
+            "Skipped unless ticked."
+        )
         self.include_deleted_check = QCheckBox()
         self.include_deleted_check.setToolTip(
             "Photos that were imported before and later deleted from your library,\n"
@@ -190,7 +202,7 @@ class MainWindow(QMainWindow):
             "already there from the same camera, so they were most likely imported and\n"
             "deleted before the app kept a history. Skipped unless ticked."
         )
-        for check in (self.include_deleted_check, self.include_older_check):
+        for check in self._include_checks():
             check.toggled.connect(self._on_include_toggled)
             layout.addWidget(check)
         self._refresh_include_checks()
@@ -335,6 +347,7 @@ class MainWindow(QMainWindow):
                     db.cameras(),
                     db.deleted_keys(),
                     db.newest_capture_by_model(),
+                    db.newest_capture_by_model(include_deleted=False),
                 )
                 layout = LibraryLayout.from_db(db, root)
                 apply_camera_suggestions(plan, layout)
@@ -354,7 +367,7 @@ class MainWindow(QMainWindow):
     def _set_plan(self, plan: ImportPlan | None) -> None:
         """Show a fresh plan. Deleted photos always start out skipped."""
         self.plan = plan
-        for check in (self.include_deleted_check, self.include_older_check):
+        for check in self._include_checks():
             check.blockSignals(True)
             check.setChecked(False)
             check.blockSignals(False)
@@ -362,6 +375,7 @@ class MainWindow(QMainWindow):
 
     def _on_include_toggled(self) -> None:
         if self.plan is not None:
+            self.plan.include_recent_deleted = self.include_recent_deleted_check.isChecked()
             self.plan.include_deleted = self.include_deleted_check.isChecked()
             self.plan.include_older = self.include_older_check.isChecked()
         self._refresh_plan_view()
@@ -380,13 +394,26 @@ class MainWindow(QMainWindow):
         self.import_button.setText(f"Import {plan.copy_count}" if plan.copy_count else "Import")
         self.status_label.setText(plan.summary())
 
+    def _include_checks(self) -> tuple[QCheckBox, QCheckBox, QCheckBox]:
+        return (
+            self.include_recent_deleted_check,
+            self.include_deleted_check,
+            self.include_older_check,
+        )
+
     def _refresh_include_checks(self) -> None:
         plan = self.plan
+        recent = plan.recent_deleted_count if plan else 0
         deleted = plan.deleted_count if plan else 0
         older = plan.older_count if plan else 0
+        self.include_recent_deleted_check.setText(
+            f"Include {_photos(recent)} recently deleted "
+            "(newer than your newest library photo from that camera)"
+        )
         self.include_deleted_check.setText(
             f"Include {_photos(deleted)} deleted since import (imported before, then deleted)"
         )
+        self.include_recent_deleted_check.setVisible(recent > 0)
         self.include_older_check.setText(
             f"Include {_photos(older)} probably deleted earlier "
             "(older than your newest library photo from that camera)"
@@ -408,6 +435,7 @@ class MainWindow(QMainWindow):
                 str(counts["jpg"]),
                 str(counts["raw"]),
                 str(len(group.already)),
+                str(len(group.recent_deleted)),
                 str(len(group.deleted)),
                 str(len(group.older)),
             ]
@@ -518,8 +546,7 @@ class MainWindow(QMainWindow):
             self.find_button,
             self.detect_button,
             self.browse_source_button,
-            self.include_deleted_check,
-            self.include_older_check,
+            *self._include_checks(),
         ):
             widget.setEnabled(not busy)
         if busy:

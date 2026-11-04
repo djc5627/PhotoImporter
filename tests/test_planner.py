@@ -66,6 +66,23 @@ def test_photos_deleted_since_import_are_skipped_unless_included(tmp_path, card,
     assert "1 deleted since import (included)" in plan.summary()
 
 
+def test_deleted_photos_newer_than_library_are_recent(tmp_path, card, reader):
+    photos = scan_source(card, reader)
+    deleted = {p.key for p in photos}
+    present = {"RICOH GR III": "2026:11:02 10:00:00"}
+
+    plan = build_plan(
+        card, tmp_path / "t", photos, set(), {}, deleted, newest_present_by_model=present
+    )
+
+    group = plan.groups[0]
+    assert _by_name(group.recent_deleted) == ["R0000002.JPG"]  # 10:05
+    assert _by_name(group.deleted) == ["R0000001.DNG", "R0000001.JPG"]  # 10:00, not newer
+    plan.include_recent_deleted = True
+    assert _by_name(i.photo for i in plan.items) == ["R0000002.JPG"]
+    assert "1 recently deleted (included), 2 deleted since import (skipped)" in plan.summary()
+
+
 def test_photo_still_in_library_wins_over_deleted_history(tmp_path, card, reader):
     photos = scan_source(card, reader)
     keys = {p.key for p in photos}

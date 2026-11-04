@@ -48,15 +48,16 @@ Decisions so far:
 - When an unregistered camera has photos to import, a dialog asks for these on Import. They are pre-filled from the library: the camera folder and subfolders most often used by that camera model's photos in `<date>/<camera>/<subfolder>/<photo>` paths, falling back to the lowercase EXIF model and `jpg`/`raw`. This also matches cameras that were used before the app existed. The CLI uses the same suggestions without asking.
 
 **Deleted photos:**
-Each card photo falls into one of four groups:
+Each card photo falls into one of five groups:
 1. **New:** imported.
 2. **Already imported:** in the library now. Skipped.
-3. **Deleted since import:** not in the library, but in the deleted-photos history. It was imported or indexed once, then deleted. Skipped unless the user ticks *Include*.
-4. **Probably deleted earlier:** in neither, but its capture time is older than the newest library photo (current or deleted) from the same camera model. Covers photos deleted before the history existed. Skipped unless the user ticks *Include*. Photos with no EXIF capture time are never put here.
+3. **Recently deleted:** in the deleted-photos history, and its capture time is newer than the newest photo from the same camera model still in the library (or that camera has no photos left). Typically a just-deleted import folder. Kept apart from group 4 so it can be restored without bringing back every older cull. Skipped unless the user ticks *Include*.
+4. **Deleted since import:** the rest of the deleted-photos history (imported or indexed once, then deleted). Photos without a capture time land here, never in group 3. Skipped unless the user ticks *Include*.
+5. **Probably deleted earlier:** in neither, but its capture time is older than the newest library photo (current or deleted) from the same camera model. Covers photos deleted before the history existed. Skipped unless the user ticks *Include*. Photos with no EXIF capture time are never put here.
 
-The UI always shows the counts for groups 3 and 4, so nothing is skipped silently. The CLI has `--include-deleted` and `--include-older`.
+Each skipped group has its own *Include* tick, and the UI always shows their counts, so nothing is skipped silently. The CLI has `--include-recent-deleted`, `--include-deleted` and `--include-older`.
 
-Limitation of group 4: if a camera's photos are imported out of date order (e.g. two cards used in rotation, and the newer card imported first), never-imported photos on the older card land here. Ticking *Include* imports them.
+Limitation of group 5: if a camera's photos are imported out of date order (e.g. two cards used in rotation, and the newer card imported first), never-imported photos on the older card land here. Ticking *Include* imports them.
 
 **Import target folder:**
 - Create a new `YYYY.MM.DD <description>` folder (today's date, editable), **or** pick an existing one for a second import the same day.

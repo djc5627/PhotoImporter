@@ -152,13 +152,17 @@ class Database:
         """Photos that were imported once and have since been deleted from the library."""
         return self._keys("deleted_files")
 
-    def newest_capture_by_model(self) -> dict[str, str]:
-        """Latest capture time per camera model, over current and deleted library photos."""
+    def newest_capture_by_model(self, include_deleted: bool = True) -> dict[str, str]:
+        """Latest capture time per camera model, over library photos (and deleted ones)."""
+        source = "files"
+        if include_deleted:
+            source = (
+                "(SELECT model, capture_time FROM files"
+                " UNION ALL SELECT model, capture_time FROM deleted_files)"
+            )
         rows = self.conn.execute(
-            "SELECT TRIM(model), MAX(capture_time) FROM ("
-            " SELECT model, capture_time FROM files"
-            " UNION ALL SELECT model, capture_time FROM deleted_files"
-            ") WHERE model IS NOT NULL AND TRIM(model) != '' AND capture_time IS NOT NULL"
+            f"SELECT TRIM(model), MAX(capture_time) FROM {source}"
+            " WHERE model IS NOT NULL AND TRIM(model) != '' AND capture_time IS NOT NULL"
             " GROUP BY TRIM(model)"
         )
         return dict(rows)

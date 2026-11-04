@@ -55,6 +55,8 @@ def _print_plan(plan: ImportPlan) -> None:
             + (f" ({kinds})" if kinds else "")
             + f", {len(group.already)} already imported"
         )
+        if group.recent_deleted:
+            line += f", {len(group.recent_deleted)} recently deleted"
         if group.deleted:
             line += f", {len(group.deleted)} deleted since import"
         if group.older:
@@ -65,6 +67,8 @@ def _print_plan(plan: ImportPlan) -> None:
             subdirs = sorted({cam.subdir_for(p.kind) for p in to_copy})
             print("    -> " + ", ".join(str(Path(cam.folder_name) / d) for d in subdirs))
     print(plan.summary())
+    if plan.recent_deleted_count and not plan.include_recent_deleted:
+        print("  (use --include-recent-deleted to import recently deleted photos)")
     if plan.deleted_count and not plan.include_deleted:
         print("  (use --include-deleted to import photos deleted since import)")
     if plan.older_count and not plan.include_older:
@@ -93,8 +97,10 @@ def _make_plan(args: argparse.Namespace, db: Database, reader: MetadataReader) -
         db.cameras(),
         db.deleted_keys(),
         db.newest_capture_by_model(),
+        db.newest_capture_by_model(include_deleted=False),
     )
     apply_camera_suggestions(plan, LibraryLayout.from_db(db, root))
+    plan.include_recent_deleted = args.include_recent_deleted
     plan.include_deleted = args.include_deleted
     plan.include_older = args.include_older
     return plan
@@ -225,6 +231,11 @@ def build_parser() -> argparse.ArgumentParser:
             "--new", metavar="DESCRIPTION", help="new folder named 'YYYY.MM.DD DESCRIPTION'"
         )
         p.add_argument("--no-scan", action="store_true", help="skip re-indexing the photos folder")
+        p.add_argument(
+            "--include-recent-deleted",
+            action="store_true",
+            help="also import deleted photos newer than the newest library photo from the camera",
+        )
         p.add_argument(
             "--include-deleted",
             action="store_true",

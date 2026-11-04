@@ -26,17 +26,23 @@ def test_deleted_photos_need_include_flag(tmp_path, card, library, reader, capsy
     run = lambda *args: main([*db, *args], reader_factory=lambda: reader)  # noqa: E731
     run("config", "--root", str(library))
     run("import", str(card), "--target", str(library / "t"), "--yes")
-    (library / "t" / "ricoh gr iii" / "jpg" / "R0000002.JPG").unlink()
+    jpgs = library / "t" / "ricoh gr iii" / "jpg"
+    (jpgs / "R0000001.JPG").unlink()
+    (jpgs / "R0000002.JPG").unlink()
     capsys.readouterr()
 
     assert run("import", str(card), "--target", str(library / "t"), "--yes") == 0
     out = capsys.readouterr().out
-    assert "1 deleted since import (skipped)" in out
-    assert "--include-deleted" in out
+    assert "1 recently deleted (skipped), 1 deleted since import (skipped)" in out
+    assert "--include-recent-deleted" in out and "--include-deleted" in out
     assert "Nothing new to import." in out
 
-    run("import", str(card), "--target", str(library / "t"), "--yes", "--include-deleted")
-    assert (library / "t" / "ricoh gr iii" / "jpg" / "R0000002.JPG").is_file()
+    args = ("import", str(card), "--target", str(library / "t"), "--yes")
+    run(*args, "--include-recent-deleted")
+    assert (jpgs / "R0000002.JPG").is_file()
+    assert not (jpgs / "R0000001.JPG").exists()
+    run(*args, "--include-deleted")
+    assert (jpgs / "R0000001.JPG").is_file()
 
 
 def test_camera_set_changes_folder_name(tmp_path, card, library, reader, capsys):

@@ -119,21 +119,22 @@ def test_deleted_photos_are_skipped_until_ticked(qtbot, window, card, library):
     with qtbot.waitSignal(window.plan_ready, timeout=10_000):
         window.find_button.click()
     row = window.plan_tree.topLevelItem(0)
-    assert [row.text(i) for i in range(2, 7)] == ["0", "0", "2", "1", "0"]
+    assert [row.text(i) for i in range(2, 8)] == ["0", "0", "2", "1", "0", "0"]
     assert window.status_label.text() == (
-        "0 new photos, 2 already imported, 1 deleted since import (skipped)."
+        "0 new photos, 2 already imported, 1 recently deleted (skipped)."
     )
     assert not window.import_button.isEnabled()
-    assert window.include_deleted_check.isVisibleTo(window)
+    assert window.include_recent_deleted_check.isVisibleTo(window)
+    assert not window.include_deleted_check.isVisibleTo(window)
     assert not window.include_older_check.isVisibleTo(window)
 
-    window.include_deleted_check.setChecked(True)
+    window.include_recent_deleted_check.setChecked(True)
     assert window.import_button.isEnabled()
     assert window.plan_tree.topLevelItem(0).text(1) == f"ricoh gr iii{os.sep}jpg"
     with qtbot.waitSignal(window.import_done, timeout=10_000):
         window.import_button.click()
     assert deleted.is_file()
-    assert not window.include_deleted_check.isChecked()
+    assert not window.include_recent_deleted_check.isChecked()
 
 
 def test_import_requires_a_target(qtbot, window, card):

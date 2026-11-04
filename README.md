@@ -24,7 +24,8 @@ uv run photoimporter-gui
 
 Insert an SD card and the app finds its new photos on its own. Photos already in your library,
 and photos you deleted from it (e.g. in Capture One), are skipped; tick *Include* to import
-deleted ones anyway. The first time a camera's photos are imported, the app asks which folders
+deleted ones anyway. Photos deleted after your newest remaining photo from a camera (e.g. a
+whole import folder you just deleted) have their own tick, separate from older culls. The first time a camera's photos are imported, the app asks which folders
 to use, pre-filled from where that camera's photos already are in your library.
 
 Command line:
