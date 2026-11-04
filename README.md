@@ -3,7 +3,21 @@
 Imports only the new photos from camera SD cards into dated, per-camera folders
 (`2026.11.02 Halloween Hike/ricoh/jpg`, `.../ricoh/raw`). Design: [docs/tech-design.md](docs/tech-design.md).
 
-## Setup
+## Install (Windows)
+
+Download `PhotoImporter-<version>-setup.exe` from the latest successful **Test and build** run on
+GitHub (Actions tab → run → *Artifacts*) and run it. It installs for your user only (no admin
+rights), adds Photo Importer to the Start menu (and optionally the desktop), and bundles ExifTool.
+Your settings and library index are kept in `%APPDATA%\PhotoImporter`, so they carry over from the
+development version and survive reinstalling or uninstalling.
+
+The `-portable.zip` holds the same app without an installer: unzip anywhere and run
+`PhotoImporter.exe`.
+
+To build it yourself: `powershell -ExecutionPolicy Bypass -File packaging\build.ps1` (needs
+[uv](https://docs.astral.sh/uv/); the installer also needs [Inno Setup 6](https://jrsoftware.org/isinfo.php)).
+
+## Development setup
 
 Requires [uv](https://docs.astral.sh/uv/) and [ExifTool](https://exiftool.org) (`exiftool.exe` on
 PATH, or `PHOTOIMPORTER_EXIFTOOL` set to its full path).

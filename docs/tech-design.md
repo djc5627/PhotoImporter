@@ -126,7 +126,9 @@ tests/             # pytest for core; fixtures with sample files per camera
 2. **Minimal PySide6 UI:** target folder picker, manual card browse, plan summary, import with progress. Done.
 3. **Card auto-detect + camera registration dialog.** Done.
 4. **Thumbnail preview grid.** Done.
-5. **Settings screen + PyInstaller packaging** with a bundled `exiftool.exe`.
+5. **Settings screen + PyInstaller packaging** with a bundled `exiftool.exe`. Done:
+   - Settings window (General: library folder, new-folder date format, search on card insert, ExifTool location; Cameras: edit or forget registered cameras).
+   - `packaging/build.ps1` builds the PyInstaller app folder, adds ExifTool (`dist\PhotoImporter\exiftool\exiftool.exe` + `exiftool_files`), a portable zip and an Inno Setup per-user installer. The GitHub Actions workflow runs the tests on Linux and Windows and publishes the installer as a build artifact.
 
 ## Verification
 - **Unit tests (pytest):**
@@ -142,7 +144,7 @@ tests/             # pytest for core; fixtures with sample files per camera
 
 ## Assumptions (redirect if wrong)
 - The photos root defaults to `%USERPROFILE%\Pictures`.
-- The date format for new folders is `YYYY.MM.DD`, editable in settings.
+- The date format for new folders is `YYYY.MM.DD`, editable in Settings (tokens `YYYY YY MM M DD D`).
 - Older folders use `M.D.YYYY Description` and must never be renamed or moved: Capture One links to those paths. The app only reads library folders, never changes or deletes anything in them, and can import into an old folder as an existing folder. Duplicate detection goes by EXIF and filename, not folder names.
 - Cards are formatted only when nearly full, not after each import, so a card usually holds photos from several earlier imports, including some later deleted from the library.
 - Camera folder names are lowercase nicknames (e.g. `ricoh`, `sony rx100`).
