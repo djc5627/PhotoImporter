@@ -28,8 +28,9 @@ def parse_version(text: str) -> tuple[int, ...]:
     return tuple(int(part) for part in match.group(1).split(".")) if match else ()
 
 
-def is_newer(candidate: str, current: str = __version__) -> bool:
-    new, old = parse_version(candidate), parse_version(current)
+def is_newer(candidate: str, current: str | None = None) -> bool:
+    """Whether `candidate` is a later version than `current` (default: this app)."""
+    new, old = parse_version(candidate), parse_version(current or __version__)
     width = max(len(new), len(old))
     return bool(new) and new + (0,) * (width - len(new)) > old + (0,) * (width - len(old))
 

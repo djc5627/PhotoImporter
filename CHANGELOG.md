@@ -2,6 +2,21 @@
 
 All notable changes to Photo Importer. Each version's section becomes the notes of its [GitHub release](https://github.com/djc5627/PhotoImporter/releases).
 
+## [1.1.0] - 2026-11-04
+
+### Added
+- **Choose photos one by one.** Click a thumbnail to select or deselect it; selected photos have a blue border and the rest are dimmed. Only selected photos are imported. New photos start out selected. A RAW+JPG pair is selected (and imported) together.
+- **Shift-click** selects every photo from the last one you clicked to the one you Shift-click. **Select all** / **Select none** buttons (and Ctrl+A) act on the photos shown, and Space toggles the current photo. Double-click still opens a photo.
+- **Delete photos from the SD card.** *Delete…* (or the Delete key) removes the selected photos shown from the card, after asking you to confirm how many. Nothing in your library is touched. SD cards have no Recycle Bin, so each photo is first copied to a *Deleted from card* folder on your PC and that copy is sent to the Windows Recycle Bin; restoring it from there puts it back in that folder, not on the card. A photo only leaves the card once its copy is safely in the Recycle Bin. Deleting is unavailable while importing.
+- **Import confirmation** listing, for each camera, where its photos go and how many of each kind will be copied (New, Recently deleted, Deleted, Probably deleted, Imported again), with totals. It warns when some of the photos being imported aren't in the current view (Import copies every selected photo on the card, not just the ones shown) and lists what isn't being imported.
+- **All on card** view, now the default: every photo on the card, each with a coloured label for its status (New, Recently deleted, Deleted, Probably deleted, Already imported). A **Selected for import** view shows just what will be copied.
+- **Allow re-importing photos already in the library**: off by default. Already-imported photos can always be selected (for example to delete them from the card), but they're only imported again when this is on. The command line has `--include-imported` for the same.
+
+### Changed
+- Thumbnails are sorted newest first, so new photos are at the top.
+- The *Include* ticks for deleted photos now select or deselect every photo in that group, and show as partly ticked when you've changed some by hand.
+- The Import button says how many photos and files will be copied, e.g. *Import 42 photos (68 files)*.
+
 ## [1.0.0] - 2026-11-04
 
 First release.
