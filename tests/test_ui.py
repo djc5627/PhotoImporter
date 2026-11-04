@@ -167,17 +167,28 @@ def test_deleted_photos_are_skipped_until_ticked(qtbot, window, card, library):
         "0 new photos, 2 already imported, 1 recently deleted (skipped)."
     )
     assert not window.import_button.isEnabled()
-    assert window.include_recent_deleted_check.isVisibleTo(window)
-    assert not window.include_deleted_check.isVisibleTo(window)
-    assert not window.include_older_check.isVisibleTo(window)
+    assert window.in_include_menu(window.include_recent_deleted_check)
+    assert not window.in_include_menu(window.include_deleted_check)
+    assert not window.in_include_menu(window.include_older_check)
+    assert window.include_recent_deleted_check.text() == "Recently deleted (1)"
+    assert window.include_button.text() == "Include"
 
     window.include_recent_deleted_check.click()
+    assert window.include_button.text() == "Include (1)"
     assert window.import_button.isEnabled()
     assert window.plan_tree.topLevelItem(0).text(1) == f"ricoh gr iii{os.sep}jpg"
     with qtbot.waitSignal(window.import_done, timeout=10_000):
         window.import_button.click()
     assert deleted.is_file()
     assert not window.include_recent_deleted_check.isChecked()
+
+
+def test_include_button_is_off_when_every_photo_is_new(qtbot, window, card):
+    window.source_edit.setText(str(card))
+    with qtbot.waitSignal(window.plan_ready, timeout=10_000):
+        window.find_button.click()
+    assert not window.include_button.isEnabled()
+    assert "every photo on this card is new" in window.include_button.toolTip()
 
 
 def test_import_requires_a_target(qtbot, window, card):
@@ -447,13 +458,13 @@ def test_include_tick_shows_partial_and_selects_the_whole_group(qtbot, window, c
 
 def test_reimporting_needs_permission(qtbot, window, card, library):
     grid = find_with_sony_and_one_imported(qtbot, window, card, library)
-    assert window.allow_reimport_check.isVisibleTo(window)
-    assert not window.include_already_check.isVisibleTo(window)
+    assert window.in_include_menu(window.allow_reimport_check)
+    assert not window.in_include_menu(window.include_already_check)
     mouse_click(qtbot, grid, "R0000002")
     assert window.import_button.text() == "Import 1 photo"  # just DSC00001
 
     window.allow_reimport_check.click()
-    assert window.include_already_check.isVisibleTo(window)
+    assert window.in_include_menu(window.include_already_check)
     assert window.include_already_check.checkState() == Qt.CheckState.Checked
     assert window.import_button.text() == "Import 2 photos"
     assert "1 already imported (1 to import again)" in window.status_label.text()

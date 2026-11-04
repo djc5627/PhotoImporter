@@ -219,7 +219,7 @@ class ThumbnailGrid(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        row = QHBoxLayout()
+        row = self.toolbar = QHBoxLayout()  # the window adds its own controls here too
         row.addWidget(QLabel("Show:"))
         self.view_combo = QComboBox()
         self.view_combo.currentIndexChanged.connect(self._rebuild)

@@ -18,15 +18,18 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QProgressBar,
     QPushButton,
     QRadioButton,
     QSplitter,
+    QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 
 from .. import __version__
@@ -258,33 +261,43 @@ class MainWindow(QMainWindow):
         self.include_recent_deleted_check = QCheckBox()
         self.include_recent_deleted_check.setToolTip(
             "Photos you deleted that are newer than any photo from the same camera still in\n"
-            "your library, for example after deleting your latest import folder.\n"
-            "Skipped unless ticked."
+            "your library, for example after deleting your latest import folder."
         )
         self.include_deleted_check = QCheckBox()
         self.include_deleted_check.setToolTip(
             "Photos that were imported before and later deleted from your library,\n"
-            "for example during a cleanup in Capture One. Skipped unless ticked."
+            "for example during a cleanup in Capture One."
         )
         self.include_older_check = QCheckBox()
         self.include_older_check.setToolTip(
             "Photos that are not in your library but are older than the newest photo\n"
             "already there from the same camera, so they were most likely imported and\n"
-            "deleted before the app kept a history. Skipped unless ticked."
+            "deleted before the app kept a history."
         )
         self.allow_reimport_check = QCheckBox("Allow re-importing photos already in the library")
         self.allow_reimport_check.setToolTip(
-            "Lets you tick photos that are already in your library, to copy them again\n"
+            "Lets you select photos that are already in your library, to copy them again\n"
             "into this import folder. Off each time you look at a card."
         )
         self.allow_reimport_check.toggled.connect(self._on_allow_reimport)
         self.include_already_check = QCheckBox()
         self.include_already_check.setToolTip("Copies these photos again into this import folder.")
+
+        # The Include menu: one tick per kind of photo that is skipped unless you ask for it.
+        self.include_menu = QMenu(self)
+        self._include_actions: dict[QCheckBox, QWidgetAction] = {}
         for status, check in self._include_checks().items():
             check.clicked.connect(lambda on, status=status: self._on_include_clicked(status, on))
             if status == "already":
-                layout.addWidget(self.allow_reimport_check)
-            layout.addWidget(check)
+                self.include_menu.addSeparator()
+                self._add_menu_check(self.allow_reimport_check)
+            self._add_menu_check(check, indent=20 if status == "already" else 0)
+        self.include_button = QToolButton()
+        self.include_button.setText("Include")
+        self.include_button.setMenu(self.include_menu)
+        self.include_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.include_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.grid.toolbar.insertWidget(3, self.include_button)
         self._refresh_include_checks()
         return box
 
@@ -573,6 +586,23 @@ class MainWindow(QMainWindow):
         text = _photos(pictures)
         return text if files == pictures else f"{text} ({files} files)"
 
+    def _add_menu_check(self, check: QCheckBox, indent: int = 0) -> None:
+        holder = QWidget()
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(10 + indent, 4, 12, 4)
+        row.addWidget(check)
+        action = QWidgetAction(self.include_menu)
+        action.setDefaultWidget(holder)
+        self.include_menu.addAction(action)
+        self._include_actions[check] = action
+
+    def _show_in_menu(self, check: QCheckBox, show: bool) -> None:
+        self._include_actions[check].setVisible(show)
+
+    def in_include_menu(self, check: QCheckBox) -> bool:
+        """Whether `check` is offered in the Include menu (for tests)."""
+        return self._include_actions[check].isVisible()
+
     def _include_checks(self) -> dict[str, QCheckBox]:
         return {
             "recent_deleted": self.include_recent_deleted_check,
@@ -594,9 +624,11 @@ class MainWindow(QMainWindow):
         deleted = plan.deleted_count if plan else 0
         older = plan.older_count if plan else 0
         already = plan.already_count if plan else 0
-        self.include_already_check.setText(f"Include {_photos(already)} already imported")
-        self.allow_reimport_check.setVisible(already > 0)
-        self.include_already_check.setVisible(already > 0 and self.allow_reimport_check.isChecked())
+        self.include_already_check.setText(f"Already imported ({already})")
+        self._show_in_menu(self.allow_reimport_check, already > 0)
+        self._show_in_menu(
+            self.include_already_check, already > 0 and self.allow_reimport_check.isChecked()
+        )
         for status, check in self._include_checks().items():
             total = len(plan.photos(status)) if plan else 0
             ticked = plan.selected_count(status) if plan else 0
@@ -609,20 +641,26 @@ class MainWindow(QMainWindow):
             check.blockSignals(True)
             check.setCheckState(state)
             check.blockSignals(False)
-        self.include_recent_deleted_check.setText(
-            f"Include {_photos(recent)} recently deleted "
-            "(newer than your newest library photo from that camera)"
+        self.include_recent_deleted_check.setText(f"Recently deleted ({recent})")
+        self.include_deleted_check.setText(f"Deleted since import ({deleted})")
+        self.include_older_check.setText(f"Probably deleted earlier ({older})")
+        self._show_in_menu(self.include_recent_deleted_check, recent > 0)
+        self._show_in_menu(self.include_deleted_check, deleted > 0)
+        self._show_in_menu(self.include_older_check, older > 0)
+        # How many kinds of skipped photo are (partly) included, shown on the button.
+        kinds = ["recent_deleted", "deleted", "older"]
+        if self.allow_reimport_check.isChecked():
+            kinds.append("already")
+        included = sum(1 for k in kinds if plan and plan.selected_count(k))
+        anything = bool(recent or deleted or older or already)
+        self.include_button.setEnabled(anything and not self._busy)
+        self.include_button.setText(f"Include ({included})" if included else "Include")
+        self.include_button.setToolTip(
+            "Photos skipped unless you include them: deleted from your library, or already\n"
+            "imported. Their tiles show a coloured label."
+            if anything
+            else "Nothing to include: every photo on this card is new."
         )
-        self.include_deleted_check.setText(
-            f"Include {_photos(deleted)} deleted since import (imported before, then deleted)"
-        )
-        self.include_recent_deleted_check.setVisible(recent > 0)
-        self.include_older_check.setText(
-            f"Include {_photos(older)} probably deleted earlier "
-            "(older than your newest library photo from that camera)"
-        )
-        self.include_deleted_check.setVisible(deleted > 0)
-        self.include_older_check.setVisible(older > 0)
 
     @staticmethod
     def _saved_to(plan: ImportPlan, group: CameraGroup) -> str:
@@ -799,8 +837,7 @@ class MainWindow(QMainWindow):
             self.find_button,
             self.detect_button,
             self.browse_source_button,
-            *self._include_checks().values(),
-            self.allow_reimport_check,
+            self.include_button,
             self.grid.select_all_button,
             self.grid.select_none_button,
             self.grid.list,
