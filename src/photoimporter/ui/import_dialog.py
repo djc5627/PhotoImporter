@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.planner import ImportBreakdown
+from .theme import colors, muted
 
 COLUMN_LABELS = {
     "new": "New",
@@ -99,14 +100,13 @@ class ImportConfirmDialog(QDialog):
 
         self.hidden_label = QLabel(
             f"⚠ {breakdown.hidden} of these "
-            f"{'photo isn’t' if breakdown.hidden == 1 else 'photos aren’t'} in the current view."
+            f"{'photos isn’t' if breakdown.hidden == 1 else 'photos aren’t'} in the current view."
         )
-        self.hidden_label.setStyleSheet("color: #a15c00")
+        self.hidden_label.setStyleSheet(f"color: {colors().warning}")
         self.hidden_label.setVisible(breakdown.hidden > 0)
         layout.addWidget(self.hidden_label)
 
-        self.not_importing_label = QLabel(not_importing_text(breakdown))
-        self.not_importing_label.setStyleSheet("color: gray")
+        self.not_importing_label = muted(QLabel(not_importing_text(breakdown)))
         self.not_importing_label.setWordWrap(True)
         self.not_importing_label.setVisible(bool(self.not_importing_label.text()))
         layout.addWidget(self.not_importing_label)

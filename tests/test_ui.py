@@ -882,3 +882,82 @@ def test_import_dialog_shows_only_columns_with_photos(qtbot, tmp_path):
     assert dialog.not_importing_label.text() == (
         "Not importing: 5 new photos you deselected, 120 already imported."
     )
+
+
+@pytest.fixture
+def light_afterwards(qapp):
+    yield
+    from photoimporter.ui.theme import apply_appearance
+
+    apply_appearance(qapp, "light", "blue")
+
+
+def test_dark_appearance_restyles_the_window(qtbot, window, qapp, light_afterwards, monkeypatch):
+    from photoimporter.ui.theme import DARK, LIGHT, colors, is_dark
+
+    assert not is_dark()
+    assert LIGHT.disabled_bg in window.import_button.styleSheet()
+
+    def choose_dark():
+        window.db.set_setting("appearance", "dark")
+        return True
+
+    monkeypatch.setattr(window, "_exec_settings", choose_dark)
+    window.open_settings()
+    assert is_dark() and colors() is DARK
+    assert DARK.disabled_bg in window.import_button.styleSheet()  # restyled on the change
+    assert DARK.banner_bg in window.update_bar.styleSheet()
+
+    # Windows switching by itself (appearance "Same as Windows") arrives as a palette change.
+    from photoimporter.ui.theme import apply_appearance
+
+    window.db.set_setting("appearance", "system")
+    apply_appearance(qapp, "light")  # as if Windows switched to light
+    window._on_color_scheme_changed()
+    qapp.processEvents()
+    assert not is_dark()
+    assert LIGHT.banner_bg in window.update_bar.styleSheet()
+
+
+def test_appearance_is_saved_from_settings(qtbot, db, light_afterwards):
+    from photoimporter.core.config import appearance
+    from photoimporter.ui.settings_dialog import SettingsDialog
+
+    assert appearance(db) == "system"
+    dialog = SettingsDialog(db, None, lambda: None)
+    qtbot.addWidget(dialog)
+    assert dialog.appearance_combo.currentText() == "Same as Windows"
+    dialog.appearance_combo.setCurrentIndex(dialog.appearance_combo.findData("dark"))
+    dialog.accept()
+    assert appearance(db) == "dark"
+    db.set_setting("appearance", "purple")
+    assert appearance(db) == "system"  # unknown values fall back
+
+
+def test_accent_colour_is_chosen_in_settings_and_used(qtbot, window, qapp, light_afterwards):
+    from PySide6.QtGui import QPalette
+
+    from photoimporter.core.config import ACCENTS, accent_choice
+    from photoimporter.ui.settings_dialog import SettingsDialog
+    from photoimporter.ui.theme import accent
+
+    assert accent_choice(window.db) == "blue"
+    assert accent().name() == ACCENTS["blue"]
+
+    dialog = SettingsDialog(window.db, None, lambda: None)
+    qtbot.addWidget(dialog)
+    assert dialog.accent_picker.buttons["blue"].isChecked()
+    dialog.accent_picker.buttons["teal"].click()
+    assert dialog.accent_picker.name_label.text() == "Teal"
+    dialog.accept()
+    window._apply_settings()
+
+    assert accent().name() == ACCENTS["teal"]
+    assert ACCENTS["teal"] in window.import_button.styleSheet()
+    assert qapp.palette().color(QPalette.ColorRole.Highlight).name() == ACCENTS["teal"]
+
+    window.db.set_setting("accent", "system")
+    window._apply_settings()
+    assert accent_choice(window.db) == "system"
+    window.db.set_setting("accent", "chartreuse")
+    assert accent_choice(window.db) == "blue"  # unknown values fall back

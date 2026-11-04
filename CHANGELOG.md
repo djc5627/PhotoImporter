@@ -2,6 +2,15 @@
 
 All notable changes to Photo Importer. Each version's section becomes the notes of its [GitHub release](https://github.com/djc5627/PhotoImporter/releases).
 
+## [1.4.0] - 2026-11-04
+
+### Added
+- **Light and dark appearance.** Settings → General → *Appearance*: *Same as Windows* (the default, which also follows Windows when it switches), *Light* or *Dark*. Applies straight away, without restarting.
+- **Accent colour.** Settings → General → *Accent colour*: Windows' own accent colour, or Blue (the default), Teal, Green, Orange, Red, Pink, Purple or Graphite. It colours selection borders, day-header ticks, the Import button and highlights in menus and lists.
+
+### Fixed
+- The import confirmation said "1 of these photo isn't in the current view"; it now says "photos".
+
 ## [1.3.0] - 2026-11-04
 
 ### Added

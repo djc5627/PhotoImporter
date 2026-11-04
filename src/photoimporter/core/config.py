@@ -49,6 +49,34 @@ def find_on_insert(db: Database) -> bool:
     return db.get_setting("find_on_insert") != "0"
 
 
+APPEARANCES = ("system", "light", "dark")
+
+
+def appearance(db: Database) -> str:
+    """The colour theme: "system" (follow Windows), "light" or "dark"."""
+    value = db.get_setting("appearance")
+    return value if value in APPEARANCES else "system"
+
+
+ACCENTS = {  # name: colour; "system" is Windows' own accent colour
+    "blue": "#1e88e5",
+    "teal": "#00897b",
+    "green": "#388e3c",
+    "orange": "#ef6c00",
+    "red": "#e53935",
+    "pink": "#d81b60",
+    "purple": "#8e24aa",
+    "graphite": "#607d8b",
+}
+DEFAULT_ACCENT = "blue"
+
+
+def accent_choice(db: Database) -> str:
+    """The accent colour: a name from ACCENTS, or "system" for Windows' accent colour."""
+    value = db.get_setting("accent")
+    return value if value in ACCENTS or value == "system" else DEFAULT_ACCENT
+
+
 def check_for_updates(db: Database) -> bool:
     """Whether the app looks for a newer release when it starts."""
     return db.get_setting("check_updates") != "0"
