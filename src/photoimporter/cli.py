@@ -66,7 +66,7 @@ def _print_plan(plan: ImportPlan) -> None:
         if to_copy:
             subdirs = sorted({cam.subdir_for(p.kind) for p in to_copy})
             print("    -> " + ", ".join(str(Path(cam.folder_name) / d) for d in subdirs))
-    print(plan.summary())
+    print(plan.summary(", "))
     if plan.recent_deleted_count and not plan.include_recent_deleted:
         print("  (use --include-recent-deleted to import recently deleted photos)")
     if plan.deleted_count and not plan.include_deleted:

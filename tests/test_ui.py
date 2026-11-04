@@ -166,7 +166,7 @@ def test_deleted_photos_are_skipped_until_ticked(qtbot, window, card, library):
     group = window.plan.groups[0]
     assert [len(group.photos(s)) for s in STATUSES] == [0, 1, 0, 0, 2]
     assert window.status_label.text() == (
-        "0 new photos, 2 already imported, 1 recently deleted (skipped)."
+        "0 new photos · 2 already imported · 1 recently deleted (skipped)"
     )
     assert not window.import_button.isEnabled()
     assert window.in_include_menu(window.include_recent_deleted_check)
@@ -191,6 +191,12 @@ def test_include_button_is_off_when_every_photo_is_new(qtbot, window, card):
         window.find_button.click()
     assert not window.include_button.isEnabled()
     assert "every photo on this card is new" in window.include_button.toolTip()
+
+
+def test_long_status_does_not_widen_the_window(qtbot, window):
+    window.status_label.setText("x" * 1000)
+    assert window.minimumSizeHint().width() < 1000
+    assert window.status_label.toolTip() == "x" * 1000
 
 
 def test_import_requires_a_target(qtbot, window, card):
@@ -399,7 +405,7 @@ def test_clicking_toggles_photos(qtbot, window, card, library):
     mouse_click(qtbot, grid, "DSC00001")
     assert chosen(grid)["DSC00001"] == "off"
     assert window.status_label.text() == (
-        "1 new photo (0 selected), 1 already imported, 2 probably deleted earlier (included)."
+        "1 new photo (0 selected) · 1 already imported · 2 probably deleted (included)"
     )
     assert window.import_button.text() == "Import 1 photo (2 files)"
 
@@ -457,7 +463,7 @@ def test_include_tick_shows_partial_and_selects_the_whole_group(qtbot, window, c
     window._refresh_selection_view()
     assert chosen(grid)["R0000001"] == "part"
     assert window.include_older_check.checkState() == Qt.CheckState.PartiallyChecked
-    assert "2 probably deleted earlier (1 included)" in window.status_label.text()
+    assert "2 probably deleted (1 included)" in window.status_label.text()
 
 
 def test_reimporting_needs_permission(qtbot, window, card, library):

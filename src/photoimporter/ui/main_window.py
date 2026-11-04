@@ -5,8 +5,8 @@ from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThreadPool, QUrl, Signal
-from PySide6.QtGui import QCloseEvent, QDesktopServices
+from PySide6.QtCore import QSize, Qt, QThreadPool, QUrl, Signal
+from PySide6.QtGui import QCloseEvent, QDesktopServices, QPainter, QPaintEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -55,6 +55,26 @@ from .import_dialog import ImportConfirmDialog
 from .settings_dialog import SettingsDialog
 from .thumbnail_grid import ThumbnailGrid
 from .workers import BackgroundCall, ReportProgress, Worker
+
+
+class ElidedLabel(QLabel):
+    """One line of text, cut off with … when it doesn't fit; the full text is the tooltip.
+
+    Unlike a plain QLabel, a long text doesn't force the window to be wider.
+    """
+
+    def setText(self, text: str) -> None:  # noqa: N802 (Qt name)
+        super().setText(text)
+        self.setToolTip(text)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(0, super().minimumSizeHint().height())
+
+    def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802
+        painter = QPainter(self)
+        metrics = self.fontMetrics()
+        text = metrics.elidedText(self.text(), Qt.TextElideMode.ElideRight, self.width())
+        painter.drawText(self.rect(), int(self.alignment()), text)
 
 
 def _photos(n: int) -> str:
@@ -290,13 +310,23 @@ class MainWindow(QMainWindow):
 
     def _build_footer(self) -> QHBoxLayout:
         row = QHBoxLayout()
-        self.status_label = QLabel("Ready.")
+        row.setSpacing(8)
+        self.status_label = ElidedLabel("Ready.")
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.setVisible(False)
         self.cancel_button.clicked.connect(self._cancel.set)
         self.import_button = QPushButton("Import")
+        self.import_button.setObjectName("importButton")
+        self.import_button.setStyleSheet(
+            "#importButton { background: #1e78d7; color: white; font-weight: 600;"
+            " border: 1px solid #1663b4; border-radius: 4px; padding: 6px 18px; }"
+            "#importButton:hover { background: #2a86e6; }"
+            "#importButton:pressed { background: #1663b4; }"
+            "#importButton:disabled { background: #d6dbe1; color: #8a929b;"
+            " border-color: #c4cad1; }"
+        )
         self.import_button.setEnabled(False)
         self.import_button.clicked.connect(self.start_import)
         row.addWidget(self.status_label, stretch=1)
