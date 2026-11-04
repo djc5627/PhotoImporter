@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QSlider,
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
@@ -36,7 +37,17 @@ from ..core.models import PhotoFile
 from ..core.planner import STATUS_LABELS, STATUSES, CameraGroup, ImportPlan
 from ..core.thumbnails import Shot, Thumbnail, ThumbnailSource, group_shots
 
-THUMB_SIZE = QSize(160, 120)
+# Tile sizes for the size slider. Large uses the cameras' bigger embedded preview.
+SIZES = [("Small", QSize(120, 90)), ("Medium", QSize(160, 120)), ("Large", QSize(320, 240))]
+DEFAULT_SIZE = 1
+SMALL_IMAGE = QSize(160, 120)  # what the camera's small thumbnail gives
+LARGE_IMAGE = QSize(320, 240)
+
+
+def _is_large(size: QSize) -> bool:
+    return size.width() > SMALL_IMAGE.width()
+
+
 _ROTATIONS = {3: 180, 6: 90, 8: 270}
 
 # (label, photos of a group shown in that view)
@@ -55,24 +66,30 @@ STATUS_COLORS = {
 }
 
 
-def thumbnail_image(thumb: Thumbnail, path: Path) -> QImage | None:
-    """Decode, rotate upright and shrink a thumbnail. Falls back to decoding a JPG itself."""
+def thumbnail_image(thumb: Thumbnail, path: Path, size: QSize = SMALL_IMAGE) -> QImage | None:
+    """Decode, rotate upright and shrink a thumbnail to fit `size`.
+
+    Falls back to decoding a JPG itself when it has no embedded preview, or (for a large
+    size) only one too small to look sharp.
+    """
     image = QImage.fromData(thumb.data) if thumb.data else QImage()
-    if image.isNull() and path.suffix.lower() in (".jpg", ".jpeg"):
+    small = not image.isNull() and max(image.width(), image.height()) < size.width() * 0.8
+    if (image.isNull() or small) and path.suffix.lower() in (".jpg", ".jpeg"):
         reader = QImageReader(str(path))
         reader.setAutoTransform(True)  # the file's own orientation is applied here
-        size = reader.size()
-        if size.isValid():
-            reader.setScaledSize(size.scaled(THUMB_SIZE * 2, Qt.AspectRatioMode.KeepAspectRatio))
-        image = reader.read()
-        thumb = Thumbnail(None, 1)
+        full = reader.size()
+        if full.isValid():
+            reader.setScaledSize(full.scaled(size * 2, Qt.AspectRatioMode.KeepAspectRatio))
+        decoded = reader.read()
+        if not decoded.isNull():
+            image, thumb = decoded, Thumbnail(None, 1)
     if image.isNull():
         return None
     angle = _ROTATIONS.get(thumb.orientation)
     if angle:
         image = image.transformed(QTransform().rotate(angle))
     return image.scaled(
-        THUMB_SIZE, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+        size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
     )
 
 
@@ -84,9 +101,15 @@ class _JobSignals(QObject):
 class ThumbnailJob(QRunnable):
     """Loads thumbnails for `paths` in small batches, so the first ones appear quickly."""
 
-    def __init__(self, paths: Sequence[Path], source_factory: Callable[[], ThumbnailSource]):
+    def __init__(
+        self,
+        paths: Sequence[Path],
+        source_factory: Callable[[], ThumbnailSource],
+        large: bool = False,
+    ):
         super().__init__()
         self.paths = list(paths)
+        self.large = large
         self.source_factory = source_factory
         self.cancel = threading.Event()
         self.signals = _JobSignals()
@@ -106,20 +129,24 @@ class ThumbnailJob(QRunnable):
         while start < len(self.paths) and not self.cancel.is_set():
             batch = self.paths[start : start + size]
             try:
-                thumbs = source.extract(batch) if source else {}
+                thumbs = source.extract(batch, large=self.large) if source else {}
             except Exception:
                 thumbs = {}
             for path in batch:
                 if self.cancel.is_set():
                     return
-                image = thumbnail_image(thumbs.get(path, Thumbnail(None)), path)
+                image = thumbnail_image(
+                    thumbs.get(path, Thumbnail(None)),
+                    path,
+                    LARGE_IMAGE if self.large else SMALL_IMAGE,
+                )
                 self.signals.loaded.emit(path, image)
             start += size
             size = 120
 
 
-def _placeholder(text: str) -> QPixmap:
-    pixmap = QPixmap(THUMB_SIZE)
+def _placeholder(text: str, size: QSize) -> QPixmap:
+    pixmap = QPixmap(size)
     pixmap.fill(QColor("#d8d8d8"))
     painter = QPainter(pixmap)
     painter.setPen(QColor("#777"))
@@ -128,15 +155,19 @@ def _placeholder(text: str) -> QPixmap:
     return pixmap
 
 
-def _with_status(pixmap: QPixmap, status: str) -> QPixmap:
-    """The thumbnail with its status as a coloured label in the top-left corner."""
-    result = QPixmap(THUMB_SIZE)
+def _with_status(pixmap: QPixmap, status: str, size: QSize) -> QPixmap:
+    """The thumbnail, shrunk to fit `size`, with its status as a label in the top-left corner."""
+    if pixmap.width() > size.width() or pixmap.height() > size.height():
+        pixmap = pixmap.scaled(
+            size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+        )
+    result = QPixmap(size)
     result.fill(Qt.GlobalColor.transparent)
     painter = QPainter(result)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     painter.drawPixmap(
-        (THUMB_SIZE.width() - pixmap.width()) // 2,
-        (THUMB_SIZE.height() - pixmap.height()) // 2,
+        (size.width() - pixmap.width()) // 2,
+        (size.height() - pixmap.height()) // 2,
         pixmap,
     )
     font = painter.font()
@@ -199,6 +230,7 @@ class ThumbnailGrid(QWidget):
     thumbnails_loaded = Signal()
     selection_changed = Signal()
     delete_requested = Signal()
+    size_changed = Signal(int)  # index into SIZES
 
     def __init__(
         self, source_factory: Callable[[], ThumbnailSource], parent: QWidget | None = None
@@ -207,15 +239,16 @@ class ThumbnailGrid(QWidget):
         self.source_factory = source_factory
         self.plan: ImportPlan | None = None
         self.groups: list[CameraGroup] = []
+        # Decoded thumbnails, small and large kept apart so switching sizes back is instant.
         self.cache: dict[Path, QImage | None] = {}
+        self.large_cache: dict[Path, QImage | None] = {}
+        self.size_index = DEFAULT_SIZE
         self._statuses: dict[Path, str] = {}
         self._items: dict[Path, list[QListWidgetItem]] = {}
         self._job: ThumbnailJob | None = None
         self._running: set[ThumbnailJob] = set()  # kept alive until their thread is done
         self._anchor: int | None = None  # row of the last clicked tile, for Shift-click
         self._last_toggle: tuple[int, set[Path]] | None = None  # to undo on double-click
-        self._loading = QPixmap(_placeholder("Loading…"))
-        self._missing = QPixmap(_placeholder("No preview"))
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -236,14 +269,25 @@ class ThumbnailGrid(QWidget):
         self.delete_button = QPushButton("Delete…")
         self.delete_button.setToolTip("Delete the selected photos shown from the SD card (Delete)")
         self.delete_button.clicked.connect(self.delete_requested)
+        self.size_slider = QSlider(Qt.Orientation.Horizontal)
+        self.size_slider.setRange(0, len(SIZES) - 1)
+        self.size_slider.setPageStep(1)
+        self.size_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.size_slider.setFixedWidth(70)
+        self.size_slider.setValue(DEFAULT_SIZE)
+        self.size_slider.valueChanged.connect(self.set_thumbnail_size)
+        self.size_label = QLabel()
+        self.size_label.setMinimumWidth(QLabel("Medium").sizeHint().width())
+        row.addWidget(QLabel("Size:"))
+        row.addWidget(self.size_slider)
+        row.addWidget(self.size_label)
+        row.addSpacing(8)
         for button in (self.select_all_button, self.select_none_button, self.delete_button):
             row.addWidget(button)
         layout.addLayout(row)
 
         self.list = QListWidget()
         self.list.setViewMode(QListView.ViewMode.IconMode)
-        self.list.setIconSize(THUMB_SIZE)
-        self.list.setGridSize(QSize(THUMB_SIZE.width() + 20, THUMB_SIZE.height() + 40))
         self.list.setResizeMode(QListView.ResizeMode.Adjust)
         self.list.setMovement(QListView.Movement.Static)
         self.list.setUniformItemSizes(True)
@@ -252,7 +296,9 @@ class ThumbnailGrid(QWidget):
         self.list.itemClicked.connect(self._on_clicked)
         self.list.itemDoubleClicked.connect(self._on_double_clicked)
         self.list.installEventFilter(self)
+        self.list.viewport().installEventFilter(self)  # Ctrl+scroll arrives here
         layout.addWidget(self.list)
+        self._apply_size()
         self._refresh_buttons()
 
     # Public
@@ -261,6 +307,7 @@ class ThumbnailGrid(QWidget):
         """Show `plan`, limited to `groups` (all cameras if None or empty)."""
         if plan is None or (self.plan is not None and plan.source != self.plan.source):
             self.cache.clear()
+            self.large_cache.clear()
         if plan is not self.plan:
             self.view_combo.blockSignals(True)
             self.view_combo.setCurrentIndex(0)
@@ -270,6 +317,43 @@ class ThumbnailGrid(QWidget):
         self.groups = list(groups or (plan.groups if plan else []))
         self._refresh_combo()
         self._rebuild()
+
+    @property
+    def thumb_size(self) -> QSize:
+        return SIZES[self.size_index][1]
+
+    def set_thumbnail_size(self, index: int) -> None:
+        """Show tiles at SIZES[index]: 0 small, 1 medium, 2 large."""
+        index = max(0, min(index, len(SIZES) - 1))
+        if index == self.size_index:
+            return
+        large_before = _is_large(self.thumb_size)
+        self.size_index = index
+        self._apply_size()
+        if _is_large(self.thumb_size) != large_before:
+            self._rebuild()  # loads the other kind of preview
+        else:
+            for i in range(self.list.count()):
+                item = self.list.item(i)
+                item.setSizeHint(self.list.gridSize())
+                self._set_icon(item, item.data(Qt.ItemDataRole.UserRole).primary.path)
+        self.size_changed.emit(index)
+
+    def _apply_size(self) -> None:
+        size = self.thumb_size
+        self.size_slider.blockSignals(True)
+        self.size_slider.setValue(self.size_index)
+        self.size_slider.blockSignals(False)
+        name = SIZES[self.size_index][0]
+        self.size_label.setText(name)
+        self.size_slider.setToolTip(f"Thumbnail size: {name} (Ctrl+scroll over the photos)")
+        self._loading = _placeholder("Loading…", size)
+        self._missing = _placeholder("No preview", size)
+        self.list.setIconSize(size)
+        self.list.setGridSize(QSize(size.width() + 20, size.height() + 40))
+
+    def _cache(self) -> dict[Path, QImage | None]:
+        return self.large_cache if _is_large(self.thumb_size) else self.cache
 
     def refresh_checks(self) -> None:
         """Update highlights and counts after the plan's selection changed elsewhere."""
@@ -359,6 +443,14 @@ class ThumbnailGrid(QWidget):
         self._open(item)
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        if (
+            obj is self.list.viewport()
+            and event.type() == QEvent.Type.Wheel
+            and event.modifiers() & Qt.KeyboardModifier.ControlModifier
+        ):
+            step = 1 if event.angleDelta().y() > 0 else -1 if event.angleDelta().y() < 0 else 0
+            self.set_thumbnail_size(self.size_index + step)
+            return True
         if obj is self.list and event.type() == QEvent.Type.KeyPress:
             key = event.key()
             if key == Qt.Key.Key_Space and self.list.currentItem() is not None:
@@ -416,6 +508,7 @@ class ThumbnailGrid(QWidget):
         self._anchor = self._last_toggle = None
         shots = group_shots(self._photos(max(self.view_combo.currentIndex(), 0)))
         to_load: list[Path] = []
+        cache = self._cache()
         for shot in shots:
             item = QListWidgetItem(f"{shot.name}  {shot.badge}".strip())
             item.setData(Qt.ItemDataRole.UserRole, shot)
@@ -424,15 +517,18 @@ class ThumbnailGrid(QWidget):
             path = shot.primary.path
             self._set_icon(item, path)
             self._apply_chosen(item)
-            if path not in self.cache and path not in self._items:
+            if path not in cache and path not in self._items:
                 to_load.append(path)
             self._items.setdefault(path, []).append(item)
             self.list.addItem(item)
         self._refresh_count()
         if to_load:
-            job = ThumbnailJob(to_load, self.source_factory)
+            large = _is_large(self.thumb_size)
+            job = ThumbnailJob(to_load, self.source_factory, large)
             job.setAutoDelete(False)
-            job.signals.loaded.connect(self._on_loaded)
+            job.signals.loaded.connect(
+                lambda path, image, large=large: self._on_loaded(path, image, large)
+            )
             job.signals.finished.connect(lambda: self._running.discard(job))
             self._job = job
             self._running.add(job)
@@ -446,21 +542,24 @@ class ThumbnailGrid(QWidget):
         return next(s for s in STATUSES if s in found)
 
     def _set_icon(self, item: QListWidgetItem, path: Path) -> None:
-        image = self.cache.get(path)
-        if path not in self.cache:
+        cache = self._cache()
+        image = cache.get(path)
+        if path not in cache:
             pixmap = self._loading
         elif image is None:
             pixmap = self._missing
         else:
             pixmap = QPixmap.fromImage(image)
         shot: Shot = item.data(Qt.ItemDataRole.UserRole)
-        item.setIcon(QIcon(_with_status(pixmap, self._shot_status(shot))))
+        item.setIcon(QIcon(_with_status(pixmap, self._shot_status(shot), self.thumb_size)))
 
-    def _on_loaded(self, path: Path, image: QImage | None) -> None:
-        self.cache[path] = image
+    def _on_loaded(self, path: Path, image: QImage | None, large: bool = False) -> None:
+        (self.large_cache if large else self.cache)[path] = image
+        if large != _is_large(self.thumb_size):
+            return  # the size changed since this was asked for
         for item in self._items.get(path, []):
             self._set_icon(item, path)
-        if all(p in self.cache for p in self._items):
+        if all(p in self._cache() for p in self._items):
             self.thumbnails_loaded.emit()
 
     def _tooltip(self, shot: Shot) -> str:

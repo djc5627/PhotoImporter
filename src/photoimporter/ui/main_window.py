@@ -57,6 +57,7 @@ from .thumbnail_grid import ThumbnailGrid
 from .workers import BackgroundCall, ReportProgress, Worker
 
 GEOMETRY_SETTING = "window_geometry"
+THUMBNAIL_SIZE_SETTING = "thumbnail_size"  # index into thumbnail_grid.SIZES
 FIRST_SIZE = QSize(1280, 900)  # fits a 1080p screen with the taskbar and title bar
 
 
@@ -260,6 +261,12 @@ class MainWindow(QMainWindow):
         self.grid = ThumbnailGrid(self.thumbnail_factory)
         self.grid.selection_changed.connect(self._refresh_selection_view)
         self.grid.delete_requested.connect(self.delete_selected)
+        saved = self.db.get_setting(THUMBNAIL_SIZE_SETTING)
+        if saved and saved.isdigit():
+            self.grid.set_thumbnail_size(int(saved))
+        self.grid.size_changed.connect(
+            lambda index: self.db.set_setting(THUMBNAIL_SIZE_SETTING, str(index))
+        )
         layout.addWidget(self.grid)
         # Only shown when the card has photos from more than one camera.
         self.camera_combo = QComboBox()

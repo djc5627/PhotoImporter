@@ -77,7 +77,9 @@ class Thumbnail:
 
 
 class ThumbnailSource(Protocol):
-    def extract(self, paths: Sequence[Path]) -> dict[Path, Thumbnail]: ...
+    def extract(self, paths: Sequence[Path], large: bool = False) -> dict[Path, Thumbnail]:
+        """Embedded previews of `paths`; `large` prefers the bigger preview image."""
+        ...
 
 
 def _binary(value: object) -> bytes | None:
@@ -106,25 +108,33 @@ class ExifToolThumbnails:
     def __init__(self, exe: str | None = None):
         self.exe = exe or find_exiftool()
 
-    def extract(self, paths: Sequence[Path]) -> dict[Path, Thumbnail]:
+    def extract(self, paths: Sequence[Path], large: bool = False) -> dict[Path, Thumbnail]:
+        """The small ThumbnailImage (about 160×120), or with `large` the bigger PreviewImage.
+
+        Each falls back to the other when a file lacks it: some RAW formats only carry a
+        PreviewImage, and many JPGs only a ThumbnailImage.
+        """
         if not paths:
             return {}
-        records, _, _ = run_exiftool(
-            self.exe, ["-b", "-n", "-ThumbnailImage", "-Orientation"], paths
+        first, second = (
+            ("PreviewImage", "ThumbnailImage")
+            if large
+            else (
+                "ThumbnailImage",
+                "PreviewImage",
+            )
         )
+        records, _, _ = run_exiftool(self.exe, ["-b", "-n", f"-{first}", "-Orientation"], paths)
         found = match_records(paths, records)
         result = {
-            path: Thumbnail(
-                _binary(rec.get("ThumbnailImage")), _orientation(rec.get("Orientation"))
-            )
+            path: Thumbnail(_binary(rec.get(first)), _orientation(rec.get("Orientation")))
             for path, rec in found.items()
         }
-        # Some RAW formats only carry a larger PreviewImage.
         missing = [p for p in paths if result.get(p) is None or result[p].data is None]
         if missing:
-            records, _, _ = run_exiftool(self.exe, ["-b", "-n", "-PreviewImage"], missing)
+            records, _, _ = run_exiftool(self.exe, ["-b", "-n", f"-{second}"], missing)
             for path, rec in match_records(missing, records).items():
-                data = _binary(rec.get("PreviewImage"))
+                data = _binary(rec.get(second))
                 if data:
                     orientation = result[path].orientation if path in result else 1
                     result[path] = Thumbnail(data, orientation)

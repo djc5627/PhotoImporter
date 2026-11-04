@@ -20,9 +20,10 @@ class FakeThumbnails:
     """A 4x3 orange thumbnail for JPGs, none for RAWs."""
 
     calls: list[list[Path]] = []
+    large_calls: list[list[Path]] = []
 
-    def extract(self, paths):
-        FakeThumbnails.calls.append(list(paths))
+    def extract(self, paths, large=False):
+        (FakeThumbnails.large_calls if large else FakeThumbnails.calls).append(list(paths))
         image = QImage(40, 30, QImage.Format.Format_RGB32)
         image.fill(QColor("orange"))
         buffer = QBuffer()
@@ -350,6 +351,52 @@ def test_thumbnail_grid_shows_raw_jpg_pairs_once(qtbot, window, card):
     assert window.import_button.text() == "Import 2 photos (3 files)"
     image = grid.cache[card / "DCIM" / "100RICOH" / "R0000001.JPG"]
     assert (image.width(), image.height()) == (160, 120)  # scaled up to the tile, 4:3 kept
+
+
+def test_size_slider_switches_to_large_previews_and_is_remembered(qtbot, window, card):
+    from PySide6.QtCore import QPoint, QPointF
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtWidgets import QApplication
+
+    window.source_edit.setText(str(card))
+    with qtbot.waitSignal(window.grid.thumbnails_loaded, timeout=10_000):
+        window.find_button.click()
+    grid = window.grid
+    jpg = card / "DCIM" / "100RICOH" / "R0000001.JPG"
+    assert grid.size_label.text() == "Medium"
+    FakeThumbnails.large_calls.clear()
+
+    with qtbot.waitSignal(grid.thumbnails_loaded, timeout=10_000):
+        grid.size_slider.setValue(2)
+    assert grid.list.iconSize().width() == 320
+    assert grid.size_label.text() == "Large"
+    assert FakeThumbnails.large_calls  # asked for the bigger embedded previews
+    assert grid.large_cache[jpg].width() == 320
+
+    FakeThumbnails.calls.clear()
+    grid.size_slider.setValue(0)  # small: reuses the medium thumbnails, nothing reloaded
+    assert grid.list.iconSize().width() == 120
+    assert not FakeThumbnails.calls
+    assert window.db.get_setting("thumbnail_size") == "0"
+
+    def wheel(dy, modifiers):
+        event = QWheelEvent(
+            QPointF(10, 10), QPointF(10, 10), QPoint(), QPoint(0, dy),
+            Qt.MouseButton.NoButton, modifiers, Qt.ScrollPhase.NoScrollPhase, False,
+        )  # fmt: skip
+        QApplication.sendEvent(grid.list.viewport(), event)
+
+    wheel(120, Qt.KeyboardModifier.NoModifier)  # plain scrolling scrolls
+    assert grid.size_index == 0
+    wheel(120, Qt.KeyboardModifier.ControlModifier)
+    assert grid.size_label.text() == "Medium"
+    wheel(-120, Qt.KeyboardModifier.ControlModifier)
+    wheel(-120, Qt.KeyboardModifier.ControlModifier)  # already the smallest
+    assert grid.size_label.text() == "Small"
+
+    again = MainWindow(window.db_path, card_detector=lambda: [], update_checker=None)
+    qtbot.addWidget(again)
+    assert again.grid.size_label.text() == "Small"
 
 
 def find_with_sony_and_one_imported(qtbot, window, card, library):
