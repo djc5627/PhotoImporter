@@ -29,6 +29,7 @@ from PySide6.QtGui import (
     QImage,
     QImageReader,
     QPainter,
+    QPalette,
     QPen,
     QPixmap,
     QTransform,
@@ -53,6 +54,7 @@ from PySide6.QtWidgets import (
 from ..core.models import PhotoFile
 from ..core.planner import STATUS_LABELS, STATUSES, CameraGroup, ImportPlan
 from ..core.thumbnails import Shot, Thumbnail, ThumbnailSource, group_shots
+from .theme import accent, colors, muted
 
 # Tile sizes for the size slider. Large uses the cameras' bigger embedded preview.
 SIZES = [("Small", QSize(120, 90)), ("Medium", QSize(160, 120)), ("Large", QSize(320, 240))]
@@ -189,9 +191,9 @@ class ThumbnailJob(QRunnable):
 
 def _placeholder(text: str, size: QSize) -> QPixmap:
     pixmap = QPixmap(size)
-    pixmap.fill(QColor("#d8d8d8"))
+    pixmap.fill(QColor(colors().placeholder_bg))
     painter = QPainter(pixmap)
-    painter.setPen(QColor("#777"))
+    painter.setPen(QColor(colors().placeholder_text))
     painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, text)
     painter.end()
     return pixmap
@@ -230,7 +232,6 @@ def _with_status(pixmap: QPixmap, status: str, size: QSize) -> QPixmap:
 
 
 CHOSEN_ROLE = Qt.ItemDataRole.UserRole + 1  # "on", "off" or "part" (some files of the shot)
-ACCENT = QColor("#1e88e5")
 HEADER_HEIGHT = 34
 
 
@@ -288,7 +289,7 @@ class _TileDelegate(QStyledItemDelegate):
         if chosen != "off":
             painter.save()
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            pen = QPen(ACCENT, 4)
+            pen = QPen(accent(), 4)
             if chosen == "part":
                 pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(pen)
@@ -297,7 +298,7 @@ class _TileDelegate(QStyledItemDelegate):
             painter.restore()
         if option.state & QStyle.StateFlag.State_HasFocus:
             painter.save()
-            painter.setPen(QPen(QColor("#888"), 1, Qt.PenStyle.DotLine))
+            painter.setPen(QPen(QColor(colors().focus), 1, Qt.PenStyle.DotLine))
             painter.drawRect(option.rect.adjusted(1, 1, -2, -2))
             painter.restore()
 
@@ -312,12 +313,12 @@ class _TileDelegate(QStyledItemDelegate):
         # The tick: filled when the whole day is selected, a dash when part of it is.
         box = QRectF(rect.x() + 6, rect.center().y() - 8, 16, 16)
         if chosen == "off":
-            painter.setPen(QPen(QColor("#8a8a8a"), 1.5))
+            painter.setPen(QPen(QColor(colors().tick_border), 1.5))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawEllipse(box)
         else:
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(ACCENT)
+            painter.setBrush(accent())
             painter.drawEllipse(box)
             painter.setPen(QPen(QColor("white"), 2))
             c = box.center()
@@ -338,13 +339,13 @@ class _TileDelegate(QStyledItemDelegate):
         font.setBold(False)
         font.setPointSizeF(font.pointSizeF() - 1)
         painter.setFont(font)
-        painter.setPen(QColor("#777"))
+        painter.setPen(option.palette.color(QPalette.ColorRole.PlaceholderText))
         painter.drawText(
             text_rect.adjusted(title_width + 12, 0, 0, 0),
             int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
             header.counts,
         )
-        painter.setPen(QPen(QColor("#d0d0d0"), 1))
+        painter.setPen(QPen(QColor(colors().separator), 1))
         painter.drawLine(rect.left() + 4, rect.bottom(), rect.right() - 4, rect.bottom())
         painter.restore()
 
@@ -394,7 +395,7 @@ class ThumbnailGrid(QWidget):
         self.view_combo.currentIndexChanged.connect(self._rebuild)
         row.addWidget(self.view_combo)
         self.count_label = QLabel()
-        self.count_label.setStyleSheet("color: gray")
+        muted(self.count_label)
         row.addWidget(self.count_label, stretch=1)
         self.select_all_button = QPushButton("Select all")
         self.select_all_button.setToolTip("Select every photo shown (Ctrl+A)")
@@ -650,6 +651,16 @@ class ThumbnailGrid(QWidget):
             self.refresh_checks()
             self.selection_changed.emit()
         self._open(item)
+
+    def restyle(self) -> None:
+        """Redraw for a new light/dark palette (placeholder tiles have their own colours)."""
+        self._fit(force=True)
+        self.list.viewport().update()
+
+    def changeEvent(self, event: QEvent) -> None:  # noqa: N802 (Qt name)
+        if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
+            self.restyle()
+        super().changeEvent(event)
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         if obj is self.list.viewport() and event.type() == QEvent.Type.Resize:

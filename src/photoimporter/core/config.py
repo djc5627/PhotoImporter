@@ -49,6 +49,15 @@ def find_on_insert(db: Database) -> bool:
     return db.get_setting("find_on_insert") != "0"
 
 
+APPEARANCES = ("system", "light", "dark")
+
+
+def appearance(db: Database) -> str:
+    """The colour theme: "system" (follow Windows), "light" or "dark"."""
+    value = db.get_setting("appearance")
+    return value if value in APPEARANCES else "system"
+
+
 def check_for_updates(db: Database) -> bool:
     """Whether the app looks for a newer release when it starts."""
     return db.get_setting("check_updates") != "0"

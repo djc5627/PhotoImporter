@@ -5,9 +5,10 @@ from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QSize, Qt, QThreadPool, QUrl, Signal
+from PySide6.QtCore import QByteArray, QEvent, QSize, Qt, QThreadPool, QTimer, QUrl, Signal
 from PySide6.QtGui import QCloseEvent, QDesktopServices, QPainter, QPaintEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QFileDialog,
@@ -33,6 +34,7 @@ from .. import __version__
 from ..core.cameras import LibraryLayout, apply_camera_suggestions
 from ..core.cards import detect_cards, scan_source
 from ..core.config import (
+    appearance,
     apply_exiftool_setting,
     check_for_updates,
     date_format,
@@ -53,6 +55,7 @@ from .camera_dialog import CameraDialog
 from .card_watcher import CardWatcher
 from .import_dialog import ImportConfirmDialog
 from .settings_dialog import SettingsDialog
+from .theme import accent, apply_appearance, colors, muted
 from .thumbnail_grid import ThumbnailGrid
 from .workers import BackgroundCall, ReportProgress, Worker
 
@@ -137,6 +140,12 @@ class MainWindow(QMainWindow):
         layout.addLayout(self._build_footer())
         self.setCentralWidget(central)
         self._restore_geometry()
+        app = QApplication.instance()
+        if isinstance(app, QApplication):
+            apply_appearance(app, appearance(self.db))
+            # Windows switching between light and dark ("Same as Windows").
+            app.styleHints().colorSchemeChanged.connect(self._on_color_scheme_changed)
+        self._apply_styles()
 
         self._refresh_library_label()
         self._refresh_target_preview()
@@ -153,12 +162,47 @@ class MainWindow(QMainWindow):
 
     # Layout
 
+    def _apply_styles(self) -> None:
+        """Styles with colours of their own, for the current light/dark palette."""
+        c = colors()
+        self.update_bar.setStyleSheet(
+            f"#updateBar {{ background: {c.banner_bg}; border: 1px solid {c.banner_border};"
+            " border-radius: 4px; }"
+        )
+        color = accent()
+        self.import_button.setStyleSheet(
+            f"#importButton {{ background: {color.name()}; color: white; font-weight: 600;"
+            f" border: 1px solid {color.darker(120).name()}; border-radius: 4px;"
+            " padding: 6px 18px; }"
+            f"#importButton:hover {{ background: {color.lighter(110).name()}; }}"
+            f"#importButton:pressed {{ background: {color.darker(120).name()}; }}"
+            f"#importButton:disabled {{ background: {c.disabled_bg}; color: {c.disabled_text};"
+            f" border-color: {c.disabled_border}; }}"
+        )
+
+    def _on_color_scheme_changed(self, *_: object) -> None:
+        app = QApplication.instance()
+        if self._closed or not isinstance(app, QApplication):
+            return
+        if appearance(self.db) == "system":
+            apply_appearance(app, "system")
+        # Once the style has updated the palette.
+        QTimer.singleShot(0, self._restyle)
+
+    def _restyle(self) -> None:
+        if not self._closed:
+            self._apply_styles()
+            self.grid.restyle()
+
+    def changeEvent(self, event: QEvent) -> None:  # noqa: N802 (Qt name)
+        palette_events = (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange)
+        if event.type() in palette_events and hasattr(self, "import_button"):
+            self._apply_styles()  # light/dark switched
+        super().changeEvent(event)
+
     def _build_update_bar(self) -> QFrame:
         self.update_bar = QFrame()
         self.update_bar.setObjectName("updateBar")
-        self.update_bar.setStyleSheet(
-            "#updateBar { background: #e6f0fb; border: 1px solid #9cc1e8; border-radius: 4px; }"
-        )
         row = QHBoxLayout(self.update_bar)
         row.setContentsMargins(10, 4, 4, 4)
         self.update_label = QLabel()
@@ -200,7 +244,7 @@ class MainWindow(QMainWindow):
         self.description_edit = QLineEdit()
         self.description_edit.setPlaceholderText("Description, e.g. Halloween Hike")
         self.target_preview = QLabel()
-        self.target_preview.setStyleSheet("color: gray")
+        muted(self.target_preview)
         # Ignored width: a long path is cut off instead of squeezing the description box.
         self.target_preview.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.existing_edit = QLineEdit()
@@ -336,14 +380,6 @@ class MainWindow(QMainWindow):
         self.cancel_button.clicked.connect(self._cancel.set)
         self.import_button = QPushButton("Import")
         self.import_button.setObjectName("importButton")
-        self.import_button.setStyleSheet(
-            "#importButton { background: #1e78d7; color: white; font-weight: 600;"
-            " border: 1px solid #1663b4; border-radius: 4px; padding: 6px 18px; }"
-            "#importButton:hover { background: #2a86e6; }"
-            "#importButton:pressed { background: #1663b4; }"
-            "#importButton:disabled { background: #d6dbe1; color: #8a929b;"
-            " border-color: #c4cad1; }"
-        )
         self.import_button.setEnabled(False)
         self.import_button.clicked.connect(self.start_import)
         row.addWidget(self.status_label, stretch=1)
@@ -408,6 +444,10 @@ class MainWindow(QMainWindow):
 
     def _apply_settings(self) -> None:
         apply_exiftool_setting(self.db)
+        app = QApplication.instance()
+        if isinstance(app, QApplication):
+            apply_appearance(app, appearance(self.db))
+            self._restyle()
         self._refresh_library_label()
         self._refresh_target_preview()
         if self.plan is not None:

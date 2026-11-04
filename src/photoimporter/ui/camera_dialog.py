@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.models import Camera, safe_folder_name
+from .theme import muted
 
 
 class CameraDialog(QDialog):
@@ -50,8 +51,7 @@ class CameraDialog(QDialog):
         self.folder_combo.setCurrentText(camera.folder_name)
         self.jpg_edit = QLineEdit(camera.jpg_dir)
         self.raw_edit = QLineEdit(camera.raw_dir)
-        self.preview = QLabel()
-        self.preview.setStyleSheet("color: gray")
+        self.preview = muted(QLabel())
         form.addRow("Name", self.nickname_edit)
         form.addRow("Camera folder", self.folder_combo)
         form.addRow("JPG subfolder", self.jpg_edit)
