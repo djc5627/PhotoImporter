@@ -9,12 +9,12 @@ from PySide6.QtCore import Qt, QThreadPool, QUrl, Signal
 from PySide6.QtGui import QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFileDialog,
     QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -23,10 +23,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QRadioButton,
-    QSplitter,
     QToolButton,
-    QTreeWidget,
-    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
     QWidgetAction,
@@ -218,45 +215,17 @@ class MainWindow(QMainWindow):
     def _build_plan_box(self) -> QGroupBox:
         box = QGroupBox("New photos")
         layout = QVBoxLayout(box)
-        self.plan_tree = QTreeWidget()
-        self.plan_tree.setHeaderLabels(
-            [
-                "Camera",
-                "Saved to",
-                "New JPG",
-                "New RAW",
-                "Already imported",
-                "Recently deleted",
-                "Deleted",
-                "Probably deleted",
-            ]
-        )
-        header_item = self.plan_tree.headerItem()
-        header_item.setToolTip(
-            5,
-            "Imported before, then deleted, and newer than any photo from this camera\n"
-            "still in your library (e.g. you deleted your latest import folder)",
-        )
-        header_item.setToolTip(6, "Imported before, then deleted from your library")
-        header_item.setToolTip(
-            7, "Older than the newest library photo from this camera, so most likely deleted"
-        )
-        self.plan_tree.setRootIsDecorated(False)
-        self.plan_tree.setToolTip("Select a camera to show only its photos below")
-        self.plan_tree.itemSelectionChanged.connect(self._refresh_grid)
-        header = self.plan_tree.header()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.grid = ThumbnailGrid(self.thumbnail_factory)
         self.grid.selection_changed.connect(self._refresh_selection_view)
         self.grid.delete_requested.connect(self.delete_selected)
-        splitter = QSplitter(Qt.Orientation.Vertical)
-        splitter.addWidget(self.plan_tree)
-        splitter.addWidget(self.grid)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([110, 400])
-        layout.addWidget(splitter)
+        layout.addWidget(self.grid)
+        # Only shown when the card has photos from more than one camera.
+        self.camera_combo = QComboBox()
+        self.camera_combo.setToolTip("Show the photos from one camera only")
+        self.camera_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.camera_combo.currentIndexChanged.connect(self._refresh_grid)
+        self.camera_combo.setVisible(False)
+        self.grid.toolbar.insertWidget(2, self.camera_combo)
 
         self.include_recent_deleted_check = QCheckBox()
         self.include_recent_deleted_check.setToolTip(
@@ -541,23 +510,46 @@ class MainWindow(QMainWindow):
 
     def _refresh_plan_view(self) -> None:
         plan = self.plan
-        selected = {self.plan_tree.indexOfTopLevelItem(i) for i in self.plan_tree.selectedItems()}
-        self.plan_tree.blockSignals(True)
-        self.plan_tree.clear()
         self._refresh_include_checks()
+        self._refresh_camera_combo()
         if plan is None:
-            self.plan_tree.blockSignals(False)
             self.grid.set_plan(None)
             self.import_button.setEnabled(False)
             self.import_button.setText("Import")
             return
-        for index, group in enumerate(plan.groups):
-            item = self._plan_row(plan, group)
-            self.plan_tree.addTopLevelItem(item)
-            item.setSelected(index in selected)
-        self.plan_tree.blockSignals(False)
         self._refresh_grid()
         self._refresh_selection_view()
+
+    def _refresh_camera_combo(self) -> None:
+        """List the plan's cameras, keeping the chosen one if it's still there."""
+        chosen = self.camera_combo.currentData()
+        groups = self.plan.groups if self.plan else []
+        self.camera_combo.blockSignals(True)
+        self.camera_combo.clear()
+        self.camera_combo.addItem(f"All cameras ({self._pictures(groups)})", None)
+        for group in groups:
+            cam = group.camera
+            name = cam.nickname if group.registered else f"{cam.nickname} (new camera)"
+            self.camera_combo.addItem(f"{name} ({self._pictures([group])})", (cam.make, cam.model))
+        index = self.camera_combo.findData(chosen) if chosen is not None else 0
+        self.camera_combo.setCurrentIndex(max(index, 0))
+        self.camera_combo.blockSignals(False)
+        self.camera_combo.setVisible(len(groups) > 1)
+
+    @staticmethod
+    def _pictures(groups: list[CameraGroup]) -> int:
+        return len(group_shots([p for g in groups for p in g.photos()]))
+
+    def shown_groups(self) -> list[CameraGroup]:
+        """The camera groups shown in the grid: the one chosen, or all of them."""
+        if self.plan is None:
+            return []
+        chosen = self.camera_combo.currentData()
+        return [
+            g
+            for g in self.plan.groups
+            if chosen is None or (g.camera.make, g.camera.model) == chosen
+        ]
 
     def _refresh_selection_view(self) -> None:
         """Update everything that depends on which photos are ticked, without redrawing the grid."""
@@ -567,8 +559,6 @@ class MainWindow(QMainWindow):
             self.import_button.setEnabled(False)
             self.import_button.setText("Import")
             return
-        for index, group in enumerate(plan.groups):
-            self.plan_tree.topLevelItem(index).setText(1, self._saved_to(plan, group))
         pictures, files = self._import_counts()
         self.import_button.setEnabled(files > 0)
         self.import_button.setText(f"Import {self._amount(pictures, files)}" if files else "Import")
@@ -615,8 +605,7 @@ class MainWindow(QMainWindow):
         if self.plan is None:
             self.grid.set_plan(None)
             return
-        rows = sorted(self.plan_tree.indexOfTopLevelItem(i) for i in self.plan_tree.selectedItems())
-        self.grid.set_plan(self.plan, [self.plan.groups[r] for r in rows])
+        self.grid.set_plan(self.plan, self.shown_groups())
 
     def _refresh_include_checks(self) -> None:
         plan = self.plan
@@ -660,30 +649,6 @@ class MainWindow(QMainWindow):
             "imported. Their tiles show a coloured label."
             if anything
             else "Nothing to include: every photo on this card is new."
-        )
-
-    @staticmethod
-    def _saved_to(plan: ImportPlan, group: CameraGroup) -> str:
-        cam = group.camera
-        kinds = sorted({p.kind for p in plan.to_copy(group)})
-        return ", ".join(str(Path(cam.folder_name, cam.subdir_for(k))) for k in kinds) or "—"
-
-    @classmethod
-    def _plan_row(cls, plan: ImportPlan, group: CameraGroup) -> QTreeWidgetItem:
-        cam = group.camera
-        counts = group.new_by_kind()
-        name = cam.nickname if group.registered else f"{cam.nickname} (new camera)"
-        return QTreeWidgetItem(
-            [
-                name,
-                cls._saved_to(plan, group),
-                str(counts["jpg"]),
-                str(counts["raw"]),
-                str(len(group.already)),
-                str(len(group.recent_deleted)),
-                str(len(group.deleted)),
-                str(len(group.older)),
-            ]
         )
 
     # Deleting from the card

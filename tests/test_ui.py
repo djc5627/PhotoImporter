@@ -11,6 +11,7 @@ from PySide6.QtCore import QBuffer, Qt  # noqa: E402
 from PySide6.QtGui import QColor, QImage  # noqa: E402
 
 from photoimporter.core.db import Database  # noqa: E402
+from photoimporter.core.planner import STATUSES, import_breakdown  # noqa: E402
 from photoimporter.core.thumbnails import Thumbnail  # noqa: E402
 from photoimporter.ui.main_window import MainWindow  # noqa: E402
 
@@ -29,6 +30,10 @@ class FakeThumbnails:
         image.save(buffer, "JPG")
         data = bytes(buffer.data())
         return {p: Thumbnail(data if p.suffix == ".JPG" else None) for p in paths}
+
+
+def saved_to(window, index=0):
+    return import_breakdown(window.plan).cameras[index].saved_to
 
 
 @pytest.fixture
@@ -87,14 +92,11 @@ def test_find_then_import_into_new_folder(qtbot, window, card, library):
 
     with qtbot.waitSignal(window.plan_ready, timeout=10_000):
         window.find_button.click()
-    row = window.plan_tree.topLevelItem(0)
-    assert [row.text(i) for i in range(5)] == [
-        "RICOH GR III (new camera)",
-        f"ricoh gr iii{os.sep}jpg, ricoh gr iii{os.sep}raw",
-        "2",
-        "1",
-        "0",
-    ]
+    group = window.plan.groups[0]
+    assert not group.registered
+    assert saved_to(window) == f"ricoh gr iii{os.sep}jpg, ricoh gr iii{os.sep}raw"
+    assert group.new_by_kind() == {"jpg": 2, "raw": 1}
+    assert not group.already
     assert window.import_button.isEnabled()
 
     with qtbot.waitSignal(window.import_done, timeout=10_000):
@@ -136,7 +138,7 @@ def test_old_style_folders_are_left_alone(qtbot, window, card, library):
     window.source_edit.setText(str(card))
     with qtbot.waitSignal(window.plan_ready, timeout=10_000):
         window.find_button.click()
-    assert window.plan_tree.topLevelItem(0).text(3) == "1"  # already imported
+    assert len(window.plan.groups[0].already) == 1
     with qtbot.waitSignal(window.import_done, timeout=10_000):
         window.import_button.click()
 
@@ -161,8 +163,8 @@ def test_deleted_photos_are_skipped_until_ticked(qtbot, window, card, library):
 
     with qtbot.waitSignal(window.plan_ready, timeout=10_000):
         window.find_button.click()
-    row = window.plan_tree.topLevelItem(0)
-    assert [row.text(i) for i in range(2, 8)] == ["0", "0", "2", "1", "0", "0"]
+    group = window.plan.groups[0]
+    assert [len(group.photos(s)) for s in STATUSES] == [0, 1, 0, 0, 2]
     assert window.status_label.text() == (
         "0 new photos, 2 already imported, 1 recently deleted (skipped)."
     )
@@ -176,7 +178,7 @@ def test_deleted_photos_are_skipped_until_ticked(qtbot, window, card, library):
     window.include_recent_deleted_check.click()
     assert window.include_button.text() == "Include (1)"
     assert window.import_button.isEnabled()
-    assert window.plan_tree.topLevelItem(0).text(1) == f"ricoh gr iii{os.sep}jpg"
+    assert saved_to(window) == f"ricoh gr iii{os.sep}jpg"
     with qtbot.waitSignal(window.import_done, timeout=10_000):
         window.import_button.click()
     assert deleted.is_file()
@@ -289,7 +291,7 @@ def test_new_camera_gets_folders_it_already_uses_in_library(qtbot, window, card,
     assert group.library_match
     assert (group.camera.folder_name, group.camera.jpg_dir) == ("gr3", "JPEG")
     assert window.camera_folders == ["gr3"]
-    assert window.plan_tree.topLevelItem(0).text(1).startswith(f"gr3{os.sep}")
+    assert saved_to(window).startswith(f"gr3{os.sep}")
 
 
 def test_camera_dialog_cleans_folder_names(qtbot):
@@ -374,13 +376,15 @@ def test_all_on_card_newest_first_with_statuses(qtbot, window, card, library):
     view(grid, "Selected for import")
     assert [s.name for s in grid.shots()] == ["DSC00001"]
 
-    ricoh = next(
-        window.plan_tree.topLevelItem(i)
-        for i in range(window.plan_tree.topLevelItemCount())
-        if window.plan_tree.topLevelItem(i).text(0).startswith("RICOH")
-    )
+    assert window.camera_combo.isVisibleTo(window)
     view(grid, "All on card")
-    ricoh.setSelected(True)
+    window.camera_combo.setCurrentIndex(
+        next(
+            i
+            for i in range(window.camera_combo.count())
+            if window.camera_combo.itemText(i).startswith("RICOH")
+        )
+    )
     assert [s.name for s in grid.shots()] == ["R0000002", "R0000001"]
 
 
@@ -545,7 +549,8 @@ def test_settings_changes_apply_to_the_open_plan(qtbot, window, card, monkeypatc
     window.source_edit.setText(str(card))
     with qtbot.waitSignal(window.plan_ready, timeout=10_000):
         window.find_button.click()
-    assert window.plan_tree.topLevelItem(0).text(0) == "RICOH GR III (new camera)"
+    assert window.plan.groups[0].camera.nickname == "RICOH GR III"
+    assert not window.camera_combo.isVisibleTo(window)  # one camera only
 
     def edit_settings():
         camera = window.plan.groups[0].camera
@@ -557,8 +562,8 @@ def test_settings_changes_apply_to_the_open_plan(qtbot, window, card, monkeypatc
     window.description_edit.setText("Walk")
     window.open_settings()
 
-    assert window.plan_tree.topLevelItem(0).text(0) == "GR"
-    assert window.plan_tree.topLevelItem(0).text(1).startswith(f"gr{os.sep}")
+    assert window.plan.groups[0].camera.nickname == "GR"
+    assert saved_to(window).startswith(f"gr{os.sep}")
     assert window.target_preview.text().endswith(f"{date.today():%Y-%m-%d} Walk")
 
 
