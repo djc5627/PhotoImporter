@@ -121,6 +121,21 @@ def test_large_size_decodes_a_jpg_whose_only_preview_is_tiny(tmp_path):
     assert large.pixelColor(10, 10).green() > 100  # decoded from the photo, not the black thumb
 
 
+def test_previews_decode_without_guessing_the_format():
+    from PySide6.QtCore import QBuffer
+    from PySide6.QtGui import QImage
+
+    from photoimporter.ui.thumbnail_grid import _decode
+
+    for fmt in ("JPG", "TIFF"):
+        image = QImage(40, 30, QImage.Format.Format_RGB32)
+        buffer = QBuffer()
+        buffer.open(QBuffer.OpenModeFlag.WriteOnly)
+        image.save(buffer, fmt)
+        assert _decode(bytes(buffer.data())).size().width() == 40
+    assert _decode(b"<svg xmlns='http://www.w3.org/2000/svg'/>").isNull()  # no plugin guessing
+
+
 @needs_exiftool
 def test_real_exiftool_reads_embedded_thumbnail(tmp_path):
     from PySide6.QtGui import QColor, QImage

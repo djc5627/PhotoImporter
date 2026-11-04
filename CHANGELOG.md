@@ -17,6 +17,9 @@ More room for your photos.
 - **Compact top:** Library, Import into and Import from are plain rows instead of boxed sections.
 - **Footer:** a shorter summary that is cut off with … (full text on hover) instead of widening the window, and a blue Import button.
 
+### Fixed
+- A rare freeze while thumbnails were loading.
+
 ## [1.1.0] - 2026-11-04
 
 ### Added

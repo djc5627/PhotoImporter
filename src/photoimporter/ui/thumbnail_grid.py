@@ -5,6 +5,8 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from PySide6.QtCore import (
+    QBuffer,
+    QByteArray,
     QEvent,
     QObject,
     QRectF,
@@ -78,16 +80,40 @@ STATUS_COLORS = {
 }
 
 
+# Formats embedded previews come in. Naming the format matters: without one, Qt asks every
+# image plugin to guess, and the SVG plugin's guess connects Qt signals, which needs a lock
+# the main thread may hold while waiting for Python's GIL that this (worker) thread holds:
+# a deadlock that froze thumbnail loading now and then.
+_PREVIEW_FORMATS = ("JPG", "TIFF", "PNG")
+
+
+def _reader(device_or_path: QBuffer | str, fmt: str) -> QImageReader:
+    reader = QImageReader(device_or_path, fmt.encode())
+    reader.setAutoDetectImageFormat(False)  # never fall back to asking every plugin
+    return reader
+
+
+def _decode(data: bytes) -> QImage:
+    for fmt in _PREVIEW_FORMATS:
+        buffer = QBuffer()
+        buffer.setData(QByteArray(data))
+        buffer.open(QBuffer.OpenModeFlag.ReadOnly)
+        image = _reader(buffer, fmt).read()
+        if not image.isNull():
+            return image
+    return QImage()
+
+
 def thumbnail_image(thumb: Thumbnail, path: Path, size: QSize = SMALL_IMAGE) -> QImage | None:
     """Decode, rotate upright and shrink a thumbnail to fit `size`.
 
     Falls back to decoding a JPG itself when it has no embedded preview, or (for a large
     size) only one too small to look sharp.
     """
-    image = QImage.fromData(thumb.data) if thumb.data else QImage()
+    image = _decode(thumb.data) if thumb.data else QImage()
     small = not image.isNull() and max(image.width(), image.height()) < size.width() * 0.8
     if (image.isNull() or small) and path.suffix.lower() in (".jpg", ".jpeg"):
-        reader = QImageReader(str(path))
+        reader = _reader(str(path), "jpg")
         reader.setAutoTransform(True)  # the file's own orientation is applied here
         full = reader.size()
         if full.isValid():
