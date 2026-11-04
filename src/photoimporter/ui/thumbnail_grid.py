@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from datetime import date, datetime
+from itertools import groupby
 from pathlib import Path
 
 from PySide6.QtCore import (
@@ -9,6 +12,7 @@ from PySide6.QtCore import (
     QByteArray,
     QEvent,
     QObject,
+    QPointF,
     QRectF,
     QRunnable,
     QSize,
@@ -227,12 +231,52 @@ def _with_status(pixmap: QPixmap, status: str, size: QSize) -> QPixmap:
 
 CHOSEN_ROLE = Qt.ItemDataRole.UserRole + 1  # "on", "off" or "part" (some files of the shot)
 ACCENT = QColor("#1e88e5")
+HEADER_HEIGHT = 34
+
+
+@dataclass
+class DayHeader:
+    """The row above one day's photos; its UserRole data in the list."""
+
+    day: date | None  # None: photos without a usable date
+    shots: list[Shot]
+    counts: str = ""  # e.g. "84 photos · 12 selected", kept up to date by the grid
+
+    @property
+    def title(self) -> str:
+        if self.day is None:
+            return "Unknown date"
+        return f"{self.day:%A}, {self.day:%B} {self.day.day}, {self.day.year}"
+
+
+def shot_day(shot: Shot) -> date | None:
+    """The day a shot was taken (from its capture time, else the file date)."""
+    try:
+        return datetime.strptime(shot.sort_time[:10], "%Y:%m:%d").date()
+    except ValueError:
+        return None
+
+
+def is_header(item: QListWidgetItem) -> bool:
+    return isinstance(item.data(Qt.ItemDataRole.UserRole), DayHeader)
+
+
+def _item_photos(item: QListWidgetItem) -> list[PhotoFile]:
+    """The files a tile or a day header stands for."""
+    data = item.data(Qt.ItemDataRole.UserRole)
+    if isinstance(data, DayHeader):
+        return [p for shot in data.shots for p in shot.photos]
+    return data.photos
 
 
 class _TileDelegate(QStyledItemDelegate):
     """Draws chosen tiles with a coloured border and the others dimmed."""
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
+        header = index.data(Qt.ItemDataRole.UserRole)
+        if isinstance(header, DayHeader):
+            self._paint_header(painter, option, header, index.data(CHOSEN_ROLE) or "off")
+            return
         chosen = index.data(CHOSEN_ROLE) or "off"
         opt = QStyleOptionViewItem(option)
         opt.state &= ~(QStyle.StateFlag.State_Selected | QStyle.StateFlag.State_HasFocus)
@@ -256,6 +300,53 @@ class _TileDelegate(QStyledItemDelegate):
             painter.setPen(QPen(QColor("#888"), 1, Qt.PenStyle.DotLine))
             painter.drawRect(option.rect.adjusted(1, 1, -2, -2))
             painter.restore()
+
+    @staticmethod
+    def _paint_header(
+        painter: QPainter, option: QStyleOptionViewItem, header: DayHeader, chosen: str
+    ) -> None:
+        """A day's title and counts, after a round tick that selects the whole day."""
+        rect = option.rect
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        # The tick: filled when the whole day is selected, a dash when part of it is.
+        box = QRectF(rect.x() + 6, rect.center().y() - 8, 16, 16)
+        if chosen == "off":
+            painter.setPen(QPen(QColor("#8a8a8a"), 1.5))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(box)
+        else:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(ACCENT)
+            painter.drawEllipse(box)
+            painter.setPen(QPen(QColor("white"), 2))
+            c = box.center()
+            if chosen == "on":
+                painter.drawPolyline([c + QPointF(-4, 0), c + QPointF(-1, 3), c + QPointF(4, -3)])
+            else:
+                painter.drawLine(c + QPointF(-4, 0), c + QPointF(4, 0))
+        font = painter.font()
+        font.setBold(True)
+        font.setPointSizeF(font.pointSizeF() + 1)
+        painter.setFont(font)
+        painter.setPen(option.palette.text().color())
+        text_rect = rect.adjusted(32, 0, -8, 0)
+        painter.drawText(
+            text_rect, int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft), header.title
+        )
+        title_width = painter.fontMetrics().horizontalAdvance(header.title)
+        font.setBold(False)
+        font.setPointSizeF(font.pointSizeF() - 1)
+        painter.setFont(font)
+        painter.setPen(QColor("#777"))
+        painter.drawText(
+            text_rect.adjusted(title_width + 12, 0, 0, 0),
+            int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
+            header.counts,
+        )
+        painter.setPen(QPen(QColor("#d0d0d0"), 1))
+        painter.drawLine(rect.left() + 4, rect.bottom(), rect.right() - 4, rect.bottom())
+        painter.restore()
 
 
 class ThumbnailGrid(QWidget):
@@ -283,6 +374,7 @@ class ThumbnailGrid(QWidget):
         self.large_cache: dict[Path, QImage | None] = {}
         self.size_index = DEFAULT_SIZE
         self._tile = SIZES[DEFAULT_SIZE][1]  # the image area of each tile, after fitting
+        self._cell = self._tile + TILE_PADDING  # a whole tile, image plus border and name
         self._fit_timer = QTimer(self)
         self._fit_timer.setSingleShot(True)
         self._fit_timer.setInterval(40)
@@ -334,7 +426,10 @@ class ThumbnailGrid(QWidget):
         self.list.setViewMode(QListView.ViewMode.IconMode)
         self.list.setResizeMode(QListView.ResizeMode.Adjust)
         self.list.setMovement(QListView.Movement.Static)
-        self.list.setUniformItemSizes(True)
+        # Tiles and full-width day headers share the list, so sizes aren't uniform and there
+        # is no grid: each item's size hint places it.
+        self.list.setUniformItemSizes(False)
+        self.list.setSpacing(0)
         self.list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
         self.list.setItemDelegate(_TileDelegate(self.list))
         self.list.itemClicked.connect(self._on_clicked)
@@ -402,32 +497,50 @@ class ThumbnailGrid(QWidget):
         return max(1, int(width / cell + 0.5))
 
     def _fit(self, force: bool = False) -> None:
-        """Size the tiles so whole columns fill the grid's width."""
+        """Size the tiles so whole columns fill the grid's width, and headers span it."""
         nominal = self.nominal_size
         width = self.list.viewport().width()
         # A few pixels spare: Qt wraps a tile that would end exactly at the edge.
         image_width = max((width - 4) // self.columns_for(width) - TILE_PADDING.width(), 40)
-        cell_width = image_width + TILE_PADDING.width()
         tile = QSize(image_width, round(image_width * nominal.height() / nominal.width()))
-        if tile == self._tile and not force:
-            return
-        self._tile = tile
-        self._loading = _placeholder("Loading…", tile)
-        self._missing = _placeholder("No preview", tile)
-        self.list.setIconSize(tile)
-        self.list.setGridSize(QSize(cell_width, tile.height() + TILE_PADDING.height()))
-        for i in range(self.list.count()):
-            item = self.list.item(i)
-            item.setSizeHint(self.list.gridSize())
-            self._set_icon(item, item.data(Qt.ItemDataRole.UserRole).primary.path)
+        changed = tile != self._tile or force
+        if changed:
+            self._tile = tile
+            self._cell = tile + TILE_PADDING
+            self._loading = _placeholder("Loading…", tile)
+            self._missing = _placeholder("No preview", tile)
+            self.list.setIconSize(tile)
+        for item in self._all_items():
+            if is_header(item):
+                item.setSizeHint(self._header_size())
+            elif changed:
+                item.setSizeHint(self._cell)
+                self._set_icon(item, item.data(Qt.ItemDataRole.UserRole).primary.path)
+
+    def _header_size(self) -> QSize:
+        return QSize(max(self.list.viewport().width() - 4, 100), HEADER_HEIGHT)
+
+    def _all_items(self) -> list[QListWidgetItem]:
+        return [self.list.item(i) for i in range(self.list.count())]
+
+    def tiles(self) -> list[QListWidgetItem]:
+        """The photo tiles shown, without the day headers."""
+        return [item for item in self._all_items() if not is_header(item)]
+
+    def headers(self) -> list[QListWidgetItem]:
+        return [item for item in self._all_items() if is_header(item)]
+
+    @property
+    def cell_size(self) -> QSize:
+        return self._cell
 
     def _cache(self) -> dict[Path, QImage | None]:
         return self.large_cache if _is_large(self.nominal_size) else self.cache
 
     def refresh_checks(self) -> None:
         """Update highlights and counts after the plan's selection changed elsewhere."""
-        for i in range(self.list.count()):
-            self._apply_chosen(self.list.item(i))
+        for item in self._all_items():
+            self._apply_chosen(item)
         self._refresh_combo()
         if self._view_label() == "Selected for import":
             self._rebuild()
@@ -440,8 +553,8 @@ class ThumbnailGrid(QWidget):
             return []
         return [
             p
-            for i in range(self.list.count())
-            for p in self.list.item(i).data(Qt.ItemDataRole.UserRole).photos
+            for item in self.tiles()
+            for p in item.data(Qt.ItemDataRole.UserRole).photos
             if self.plan.is_selected(p)
         ]
 
@@ -451,22 +564,38 @@ class ThumbnailGrid(QWidget):
             self._job = None
 
     def shots(self) -> list[Shot]:
-        return [self.list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.list.count())]
+        return [item.data(Qt.ItemDataRole.UserRole) for item in self.tiles()]
 
     def item_for(self, name: str) -> QListWidgetItem:
-        for i in range(self.list.count()):
-            if self.list.item(i).data(Qt.ItemDataRole.UserRole).name == name:
-                return self.list.item(i)
+        for item in self.tiles():
+            if item.data(Qt.ItemDataRole.UserRole).name == name:
+                return item
         raise KeyError(name)
 
+    def header_for(self, title: str) -> QListWidgetItem:
+        for item in self.headers():
+            if item.data(Qt.ItemDataRole.UserRole).title == title:
+                return item
+        raise KeyError(title)
+
     def click(self, item: QListWidgetItem, shift: bool = False) -> None:
-        """Toggle a tile, or with `shift` choose the range from the last clicked tile."""
+        """Toggle a tile, or with `shift` choose the range from the last clicked tile.
+
+        Clicking a day header selects every photo from that day, or deselects them if all
+        already are.
+        """
         if self.plan is None:
             return
         row = self.list.row(item)
+        if is_header(item):
+            self._choose([item], item.data(CHOSEN_ROLE) != "on")
+            self._last_toggle = None
+            self.list.setCurrentItem(item)
+            return
         if shift and self._anchor is not None and self._anchor < self.list.count():
             low, high = sorted((self._anchor, row))
-            self._choose([self.list.item(r) for r in range(low, high + 1)], True)
+            between = [self.list.item(r) for r in range(low, high + 1)]
+            self._choose([i for i in between if not is_header(i)], True)
             self._last_toggle = None
         else:
             photos = item.data(Qt.ItemDataRole.UserRole).photos
@@ -479,21 +608,30 @@ class ThumbnailGrid(QWidget):
     # Choosing
 
     def _apply_chosen(self, item: QListWidgetItem) -> None:
-        shot: Shot = item.data(Qt.ItemDataRole.UserRole)
-        chosen = sum(self.plan.is_selected(p) for p in shot.photos) if self.plan else 0
-        state = "off" if chosen == 0 else "on" if chosen == len(shot.photos) else "part"
+        data = item.data(Qt.ItemDataRole.UserRole)
+        photos = _item_photos(item)
+        chosen = sum(self.plan.is_selected(p) for p in photos) if self.plan else 0
+        state = "off" if chosen == 0 else "on" if chosen == len(photos) else "part"
+        if isinstance(data, DayHeader):
+            picked = sum(
+                any(self.plan.is_selected(p) for p in shot.photos) if self.plan else False
+                for shot in data.shots
+            )
+            total = len(data.shots)
+            data.counts = f"{total} photo{'s' if total != 1 else ''} · {picked} selected"
+            item.setData(Qt.ItemDataRole.UserRole, data)
         item.setData(CHOSEN_ROLE, state)
 
     def _choose(self, items: list[QListWidgetItem], on: bool) -> None:
         if self.plan is None:
             return
         for item in items:
-            self.plan.select(item.data(Qt.ItemDataRole.UserRole).photos, on)
+            self.plan.select(_item_photos(item), on)
         self.refresh_checks()
         self.selection_changed.emit()
 
     def _choose_shown(self, on: bool) -> None:
-        self._choose([self.list.item(i) for i in range(self.list.count())], on)
+        self._choose(self.tiles(), on)
 
     def _on_clicked(self, item: QListWidgetItem) -> None:
         shift = bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier)
@@ -501,6 +639,8 @@ class ThumbnailGrid(QWidget):
 
     def _on_double_clicked(self, item: QListWidgetItem) -> None:
         # The first click of a double-click toggled the tile; put it back, then open the photo.
+        if is_header(item):
+            return
         row = self.list.row(item)
         if self.plan is not None and self._last_toggle and self._last_toggle[0] == row:
             photos = item.data(Qt.ItemDataRole.UserRole).photos
@@ -560,14 +700,13 @@ class ThumbnailGrid(QWidget):
         if self.plan is None:
             self.count_label.setText("")
         else:
-            chosen = sum(
-                self.list.item(i).data(CHOSEN_ROLE) != "off" for i in range(self.list.count())
-            )
-            self.count_label.setText(f"{self.list.count()} pictures, {chosen} selected")
+            tiles = self.tiles()
+            chosen = sum(item.data(CHOSEN_ROLE) != "off" for item in tiles)
+            self.count_label.setText(f"{len(tiles)} pictures, {chosen} selected")
         self._refresh_buttons()
 
     def _refresh_buttons(self) -> None:
-        has_items = self.plan is not None and self.list.count() > 0
+        has_items = self.plan is not None and bool(self.tiles())
         self.select_all_button.setEnabled(has_items)
         self.select_none_button.setEnabled(has_items)
         self.delete_button.setEnabled(bool(self.chosen_shown()))
@@ -580,19 +719,33 @@ class ThumbnailGrid(QWidget):
         shots = group_shots(self._photos(max(self.view_combo.currentIndex(), 0)))
         to_load: list[Path] = []
         cache = self._cache()
-        for shot in shots:
-            item = QListWidgetItem(f"{shot.name}  {shot.badge}".strip())
-            item.setData(Qt.ItemDataRole.UserRole, shot)
-            item.setToolTip(self._tooltip(shot))
-            item.setSizeHint(self.list.gridSize())
-            path = shot.primary.path
-            self._set_icon(item, path)
-            self._apply_chosen(item)
-            if path not in cache and path not in self._items:
-                to_load.append(path)
-            self._items.setdefault(path, []).append(item)
-            self.list.addItem(item)
+        for day, day_shots in groupby(shots, key=shot_day):  # shots are newest first
+            day_shots = list(day_shots)
+            header = QListWidgetItem()
+            header.setData(Qt.ItemDataRole.UserRole, DayHeader(day, day_shots))
+            header.setToolTip("Click to select or deselect every photo from this day")
+            header.setSizeHint(self._header_size())
+            self._apply_chosen(header)
+            self.list.addItem(header)
+            for shot in day_shots:
+                self._add_tile(shot, cache, to_load)
         self._refresh_count()
+        self._start_loading(to_load)
+
+    def _add_tile(self, shot: Shot, cache: dict[Path, QImage | None], to_load: list[Path]) -> None:
+        item = QListWidgetItem(f"{shot.name}  {shot.badge}".strip())
+        item.setData(Qt.ItemDataRole.UserRole, shot)
+        item.setToolTip(self._tooltip(shot))
+        item.setSizeHint(self._cell)
+        path = shot.primary.path
+        self._set_icon(item, path)
+        self._apply_chosen(item)
+        if path not in cache and path not in self._items:
+            to_load.append(path)
+        self._items.setdefault(path, []).append(item)
+        self.list.addItem(item)
+
+    def _start_loading(self, to_load: list[Path]) -> None:
         if to_load:
             large = _is_large(self.nominal_size)
             job = ThumbnailJob(to_load, self.source_factory, large)
