@@ -83,6 +83,59 @@ def test_falls_back_to_preview_image_for_raws(tmp_path, monkeypatch):
     }
 
 
+def test_large_prefers_the_preview_image(tmp_path, monkeypatch):
+    jpg = tmp_path / "A.JPG"
+    b64 = "base64:" + base64.b64encode(b"big").decode()
+    asked = []
+
+    def run(args, **kw):
+        asked.append([a for a in args if a.startswith("-") and a[1:2].isupper()])
+        record = {"SourceFile": jpg.as_posix(), "PreviewImage": b64, "Orientation": 6}
+        return fake_run(json.dumps([record]).encode())(args)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    result = ExifToolThumbnails(exe="exiftool").extract([jpg], large=True)
+    assert result == {jpg: Thumbnail(b"big", 6)}
+    assert asked == [["-PreviewImage", "-Orientation"]]
+
+
+def test_large_size_decodes_a_jpg_whose_only_preview_is_tiny(tmp_path):
+    from PySide6.QtCore import QBuffer, QSize
+    from PySide6.QtGui import QColor, QImage
+
+    from photoimporter.ui.thumbnail_grid import thumbnail_image
+
+    photo_path = tmp_path / "P.JPG"
+    big = QImage(1200, 900, QImage.Format.Format_RGB32)
+    big.fill(QColor("teal"))
+    big.save(str(photo_path))
+    tiny = QImage(160, 120, QImage.Format.Format_RGB32)
+    buffer = QBuffer()
+    buffer.open(QBuffer.OpenModeFlag.WriteOnly)
+    tiny.save(buffer, "JPG")
+
+    small = thumbnail_image(Thumbnail(bytes(buffer.data())), photo_path)
+    large = thumbnail_image(Thumbnail(bytes(buffer.data())), photo_path, QSize(320, 240))
+    assert small.width() == 160
+    assert large.width() == 320
+    assert large.pixelColor(10, 10).green() > 100  # decoded from the photo, not the black thumb
+
+
+def test_previews_decode_without_guessing_the_format():
+    from PySide6.QtCore import QBuffer
+    from PySide6.QtGui import QImage
+
+    from photoimporter.ui.thumbnail_grid import _decode
+
+    for fmt in ("JPG", "TIFF"):
+        image = QImage(40, 30, QImage.Format.Format_RGB32)
+        buffer = QBuffer()
+        buffer.open(QBuffer.OpenModeFlag.WriteOnly)
+        image.save(buffer, fmt)
+        assert _decode(bytes(buffer.data())).size().width() == 40
+    assert _decode(b"<svg xmlns='http://www.w3.org/2000/svg'/>").isNull()  # no plugin guessing
+
+
 @needs_exiftool
 def test_real_exiftool_reads_embedded_thumbnail(tmp_path):
     from PySide6.QtGui import QColor, QImage

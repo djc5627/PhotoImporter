@@ -61,7 +61,9 @@ def test_photos_deleted_since_import_are_skipped_unless_included(tmp_path, card,
 
     assert (plan.new_count, plan.deleted_count, plan.copy_count) == (2, 1, 2)
     assert _by_name(i.photo for i in plan.items) == ["R0000001.DNG", "R0000002.JPG"]
-    assert plan.summary() == ("2 new photos, 0 already imported, 1 deleted since import (skipped).")
+    assert plan.summary() == (
+        "2 new photos · 0 already imported · 1 deleted since import (skipped)"
+    )
 
     plan.include_deleted = True
     assert plan.copy_count == 3
@@ -82,7 +84,7 @@ def test_deleted_photos_newer_than_library_are_recent(tmp_path, card, reader):
     assert _by_name(group.deleted) == ["R0000001.DNG", "R0000001.JPG"]  # 10:00, not newer
     plan.include_recent_deleted = True
     assert _by_name(i.photo for i in plan.items) == ["R0000002.JPG"]
-    assert "1 recently deleted (included), 2 deleted since import (skipped)" in plan.summary()
+    assert "1 recently deleted (included) · 2 deleted since import (skipped)" in plan.summary()
 
 
 def test_photo_still_in_library_wins_over_deleted_history(tmp_path, card, reader):

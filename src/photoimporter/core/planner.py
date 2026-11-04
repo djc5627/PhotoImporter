@@ -166,7 +166,7 @@ class ImportPlan:
             return "skipped"
         return "included" if ticked == total else f"{ticked} included"
 
-    def summary(self) -> str:
+    def summary(self, sep: str = " · ") -> str:
         if not (
             self.new_count or self.recent_deleted_count or self.deleted_count or self.older_count
         ) and not (self.allow_reimport and self.selected_count("already")):
@@ -182,11 +182,11 @@ class ImportPlan:
         for count, status, label in (
             (self.recent_deleted_count, "recent_deleted", "recently deleted"),
             (self.deleted_count, "deleted", "deleted since import"),
-            (self.older_count, "older", "probably deleted earlier"),
+            (self.older_count, "older", "probably deleted"),
         ):
             if count:
                 parts.append(f"{count} {label} ({self._state(status, count)})")
-        return ", ".join(parts) + "."
+        return sep.join(parts)
 
 
 def build_plan(

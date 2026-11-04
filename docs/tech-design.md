@@ -55,7 +55,7 @@ Each card photo falls into one of five groups:
 4. **Deleted since import:** the rest of the deleted-photos history (imported or indexed once, then deleted). Photos without a capture time land here, never in group 3. Skipped unless the user ticks *Include*.
 5. **Probably deleted earlier:** in neither, but its capture time is older than the newest library photo (current or deleted) from the same camera model. Covers photos deleted before the history existed. Skipped unless the user ticks *Include*. Photos with no EXIF capture time are never put here.
 
-Each skipped group has its own *Include* tick, and the UI always shows their counts, so nothing is skipped silently. The CLI has `--include-recent-deleted`, `--include-deleted` and `--include-older`.
+Each skipped group has its own tick in the *Include* menu, and the UI always shows their counts, so nothing is skipped silently. The CLI has `--include-recent-deleted`, `--include-deleted` and `--include-older`.
 
 Limitation of group 5: if a camera's photos are imported out of date order (e.g. two cards used in rotation, and the newer card imported first), never-imported photos on the older card land here. Ticking *Include* imports them.
 
@@ -110,12 +110,14 @@ tests/             # pytest for core; fixtures with sample files per camera
    - Scan the card and run the planner.
    - Prompt to register any unknown camera.
 3. **Preview:**
-   - Summary per camera, e.g. "Ricoh GR III — 42 new (42 jpg, 42 raw), 310 already imported".
-   - Thumbnail grid below the summary, loaded in the background in small batches so the first tiles appear quickly. A RAW+JPG pair (same folder, name and capture time) is one tile marked `RAW+JPG`; a RAW-only shot is marked `RAW`.
+   - A one-line summary in the footer; the per-camera breakdown is in the import confirmation.
+   - Thumbnail grid, loaded in the background in small batches so the first tiles appear quickly. A RAW+JPG pair (same folder, name and capture time) is one tile marked `RAW+JPG`; a RAW-only shot is marked `RAW`.
    - A *Show* menu switches the grid between *All on card* (the default), *Ticked for import*, and each status group. Tiles are sorted newest first (capture time, else file date) and carry a coloured status label.
    - Tiles are chosen by highlighting: a click toggles a tile, Shift-click chooses the range from the last clicked tile, Ctrl+A/*Select all*/*Select none* act on the tiles shown, Space toggles the current tile, and double-click opens the photo (undoing its first click's toggle). Chosen tiles get a blue border, the rest are dimmed. The plan keeps the set of chosen card files (new photos at first); a RAW+JPG pair is chosen together. The group *Include* ticks choose a whole status group and show partial state. Import copies chosen photos, except already-imported ones unless *Allow re-importing photos already in the library* is on.
    - Import copies every chosen photo on the card, not only the ones shown. Before copying, a confirmation window (`planner.import_breakdown` + `ui/import_dialog.py`) shows per camera the target subfolders and the number of pictures (RAW+JPG pairs once) per status, only for statuses with photos, plus totals, a warning when some aren't in the current view, and what isn't being imported.
    - *Delete…* (or the Delete key) deletes the chosen photos *shown* from the card after a confirmation with the count. `core/deleter.py` copies each file to `%LOCALAPPDATA%\PhotoImporter\Deleted from card\<time>`, sends the copies to the Recycle Bin in one `SHFileOperationW` call (`FOF_ALLOWUNDO`, with a warning if something is too big to recycle), and only then removes the card file. Files whose copy couldn't be recycled stay on the card. Disabled while busy.
+   - The grid toolbar holds *Show*, a camera dropdown (only with several cameras), the *Include* menu and a *Size* slider (Small 120 / Medium 160 / Large 320 px wide; Ctrl+scroll; saved as `thumbnail_size`). Large asks ExifTool for `PreviewImage` first and keeps a separate cache. Tiles are fitted to the width: columns = whole tiles that fit, plus one if at least half of another does, then the tiles are resized so the columns fill the row; refitted 40 ms after resizing stops.
+   - The window's geometry is saved on close (`window_geometry`); the first launch is 1280×900 centred, shrunk to fit the screen.
    - Thumbnail loading stops when an import starts, so it doesn't slow the copy.
 4. **Import:** progress bar, then a result summary. Then insert the next card and repeat into the same target folder.
 5. **Settings:** photos root, date format, camera registry editor.
