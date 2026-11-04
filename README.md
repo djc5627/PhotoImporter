@@ -22,11 +22,13 @@ changed in each version is in [CHANGELOG.md](CHANGELOG.md) and on each release p
 
 1. Set the new version in `src/photoimporter/__init__.py` (e.g. `1.0.1`).
 2. Add a `## [1.0.1] - YYYY-MM-DD` section at the top of `CHANGELOG.md`.
-3. Merge to `main`, then tag it: `git tag v1.0.1 && git push origin v1.0.1`.
+3. Merge to `main`.
 
-The **Test and build** workflow then builds and tests the installer and publishes the release,
-using the changelog section as its notes. It refuses if the tag, `__version__` and the changelog
-don't agree. Every push also builds the installer as a downloadable workflow artifact.
+The **Test and build** workflow then builds and tests the installer and, because `v1.0.1`
+hasn't been released yet, publishes the release (creating the `v1.0.1` tag), using the changelog
+section as its notes. Pushes to `main` that don't change the version don't release anything.
+A test fails if `CHANGELOG.md` has no section for the current version. Every push also builds
+the installer as a downloadable workflow artifact.
 
 To build locally instead: `powershell -ExecutionPolicy Bypass -File packaging\build.ps1` (needs
 [uv](https://docs.astral.sh/uv/); the installer also needs [Inno Setup 6](https://jrsoftware.org/isinfo.php)).
