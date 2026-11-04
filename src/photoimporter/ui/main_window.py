@@ -5,7 +5,7 @@ from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
-from PySide6.QtCore import QThreadPool, Signal
+from PySide6.QtCore import Qt, QThreadPool, Signal
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QRadioButton,
+    QSplitter,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -36,8 +37,10 @@ from ..core.exif import ExifToolReader, MetadataReader
 from ..core.indexer import ScanResult, scan_library
 from ..core.models import Camera
 from ..core.planner import CameraGroup, ImportPlan, build_plan
+from ..core.thumbnails import ExifToolThumbnails, ThumbnailSource
 from .camera_dialog import CameraDialog
 from .card_watcher import CardWatcher
+from .thumbnail_grid import ThumbnailGrid
 from .workers import ReportProgress, Worker
 
 
@@ -56,11 +59,13 @@ class MainWindow(QMainWindow):
         reader_factory: Callable[[], MetadataReader] = ExifToolReader,
         card_detector: Callable[[], list[Path]] = detect_cards,
         card_poll_ms: int = 2000,
+        thumbnail_factory: Callable[[], ThumbnailSource] = ExifToolThumbnails,
     ):
         super().__init__()
         self.db_path = db_path
         self.reader_factory = reader_factory
         self.card_detector = card_detector
+        self.thumbnail_factory = thumbnail_factory
         self.db = Database(db_path)
         self.plan: ImportPlan | None = None
         self.camera_folders: list[str] = []
@@ -70,7 +75,7 @@ class MainWindow(QMainWindow):
         self._pending_card: Path | None = None
 
         self.setWindowTitle("Photo Importer")
-        self.resize(860, 620)
+        self.resize(1000, 820)
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.addWidget(self._build_library_box())
@@ -179,11 +184,19 @@ class MainWindow(QMainWindow):
             7, "Older than the newest library photo from this camera, so most likely deleted"
         )
         self.plan_tree.setRootIsDecorated(False)
+        self.plan_tree.setToolTip("Select a camera to show only its photos below")
+        self.plan_tree.itemSelectionChanged.connect(self._refresh_grid)
         header = self.plan_tree.header()
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        layout.addWidget(self.plan_tree)
+        self.grid = ThumbnailGrid(self.thumbnail_factory)
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter.addWidget(self.plan_tree)
+        splitter.addWidget(self.grid)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([110, 400])
+        layout.addWidget(splitter)
 
         self.include_recent_deleted_check = QCheckBox()
         self.include_recent_deleted_check.setToolTip(
@@ -382,14 +395,22 @@ class MainWindow(QMainWindow):
 
     def _refresh_plan_view(self) -> None:
         plan = self.plan
+        selected = {self.plan_tree.indexOfTopLevelItem(i) for i in self.plan_tree.selectedItems()}
+        self.plan_tree.blockSignals(True)
         self.plan_tree.clear()
         self._refresh_include_checks()
         if plan is None:
+            self.plan_tree.blockSignals(False)
+            self.grid.set_plan(None)
             self.import_button.setEnabled(False)
             self.import_button.setText("Import")
             return
-        for group in plan.groups:
-            self.plan_tree.addTopLevelItem(self._plan_row(plan, group))
+        for index, group in enumerate(plan.groups):
+            item = self._plan_row(plan, group)
+            self.plan_tree.addTopLevelItem(item)
+            item.setSelected(index in selected)
+        self.plan_tree.blockSignals(False)
+        self._refresh_grid()
         self.import_button.setEnabled(plan.copy_count > 0)
         self.import_button.setText(f"Import {plan.copy_count}" if plan.copy_count else "Import")
         self.status_label.setText(plan.summary())
@@ -400,6 +421,13 @@ class MainWindow(QMainWindow):
             self.include_deleted_check,
             self.include_older_check,
         )
+
+    def _refresh_grid(self) -> None:
+        if self.plan is None:
+            self.grid.set_plan(None)
+            return
+        rows = sorted(self.plan_tree.indexOfTopLevelItem(i) for i in self.plan_tree.selectedItems())
+        self.grid.set_plan(self.plan, [self.plan.groups[r] for r in rows])
 
     def _refresh_include_checks(self) -> None:
         plan = self.plan
@@ -464,6 +492,7 @@ class MainWindow(QMainWindow):
         plan.target_dir = target
         if not self._confirm(f"Copy {plan.copy_count} photos into\n{target}?"):
             return
+        self.grid.stop()  # don't compete with the copy for the card
         db_path, cancel = self.db_path, self._cancel
         cancel.clear()
 
@@ -576,6 +605,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self.card_watcher.stop()
+        self.grid.stop()
         self._cancel.set()
         QThreadPool.globalInstance().waitForDone()
         self.db.close()

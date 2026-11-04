@@ -1,14 +1,34 @@
 import os
 from datetime import date
+from pathlib import Path
 
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from conftest import copy_by_hand  # noqa: E402
+from PySide6.QtCore import QBuffer  # noqa: E402
+from PySide6.QtGui import QColor, QImage  # noqa: E402
 
 from photoimporter.core.db import Database  # noqa: E402
+from photoimporter.core.thumbnails import Thumbnail  # noqa: E402
 from photoimporter.ui.main_window import MainWindow  # noqa: E402
+
+
+class FakeThumbnails:
+    """A 4x3 orange thumbnail for JPGs, none for RAWs."""
+
+    calls: list[list[Path]] = []
+
+    def extract(self, paths):
+        FakeThumbnails.calls.append(list(paths))
+        image = QImage(40, 30, QImage.Format.Format_RGB32)
+        image.fill(QColor("orange"))
+        buffer = QBuffer()
+        buffer.open(QBuffer.OpenModeFlag.WriteOnly)
+        image.save(buffer, "JPG")
+        data = bytes(buffer.data())
+        return {p: Thumbnail(data if p.suffix == ".JPG" else None) for p in paths}
 
 
 @pytest.fixture
@@ -18,7 +38,11 @@ def window(qtbot, tmp_path, library, reader, monkeypatch):
     db.set_setting("photos_root", str(library))
     db.close()
     win = MainWindow(
-        db_path, reader_factory=lambda: reader, card_detector=lambda: win.cards, card_poll_ms=50
+        db_path,
+        reader_factory=lambda: reader,
+        card_detector=lambda: win.cards,
+        card_poll_ms=50,
+        thumbnail_factory=FakeThumbnails,
     )
     qtbot.addWidget(win)
     win.cards = []
@@ -253,3 +277,48 @@ def test_camera_dialog_cleans_folder_names(qtbot):
     dialog.nickname_edit.setText("a7R V")
     assert ok.isEnabled()
     assert (dialog.camera().nickname, dialog.camera().folder_name) == ("a7R V", "sony_ a7r v")
+
+
+def test_thumbnail_grid_shows_raw_jpg_pairs_once(qtbot, window, card):
+    window.source_edit.setText(str(card))
+    with qtbot.waitSignal(window.grid.thumbnails_loaded, timeout=10_000):
+        window.find_button.click()
+
+    grid = window.grid
+    assert [(s.name, s.badge) for s in grid.shots()] == [("R0000001", "RAW+JPG"), ("R0000002", "")]
+    assert grid.view_combo.currentText() == "To import (3)"
+    assert grid.count_label.text() == "2 pictures (RAW+JPG pairs shown once)"
+    image = grid.cache[card / "DCIM" / "100RICOH" / "R0000001.JPG"]
+    assert (image.width(), image.height()) == (160, 120)  # scaled up to the tile, 4:3 kept
+
+
+def test_thumbnail_grid_views_follow_groups_and_cameras(qtbot, window, card, library):
+    from conftest import make_file
+
+    make_file(card / "DCIM" / "100MSDCF" / "DSC00001.JPG", b"sony-jpg")
+    copy_by_hand(card / "DCIM" / "100RICOH" / "R0000002.JPG", library / "x" / "R0000002.JPG")
+    window.source_edit.setText(str(card))
+    with qtbot.waitSignal(window.plan_ready, timeout=10_000):
+        window.find_button.click()
+    grid = window.grid
+
+    # R0000001 (10:00) is older than R0000002 (10:05, in the library): probably deleted.
+    assert [s.name for s in grid.shots()] == ["DSC00001"]
+    grid.view_combo.setCurrentIndex(4)  # Probably deleted
+    assert [s.name for s in grid.shots()] == ["R0000001"]
+
+    window.include_older_check.setChecked(True)
+    assert grid.view_combo.currentIndex() == 4  # the chosen view is kept
+    grid.view_combo.setCurrentIndex(0)
+    assert [s.name for s in grid.shots()] == ["R0000001", "DSC00001"]
+
+    ricoh = next(
+        window.plan_tree.topLevelItem(i)
+        for i in range(window.plan_tree.topLevelItemCount())
+        if window.plan_tree.topLevelItem(i).text(0).startswith("RICOH")
+    )
+    ricoh.setSelected(True)
+    assert [s.name for s in grid.shots()] == ["R0000001"]
+    window.include_older_check.setChecked(False)
+    assert window.plan_tree.selectedItems()[0].text(0).startswith("RICOH")
+    assert grid.shots() == []

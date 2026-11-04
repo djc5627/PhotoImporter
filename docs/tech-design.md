@@ -18,7 +18,7 @@ Decisions so far:
 | UI | PySide6 (Qt 6) | Native folder dialogs, efficient thumbnail grids, worker threads. |
 | Metadata | ExifTool via `pyexiftool` (stay-open batch mode) | Reliably reads ARW, CR2, CR3, DNG and JPG. Python EXIF libraries are unreliable on raws. Bundle `exiftool.exe`. |
 | Index | SQLite (`sqlite3` stdlib) at `%APPDATA%\PhotoImporter\library.db` | Fast dedup lookups. Also stores cameras, settings and the import log. |
-| Thumbnails | `QImageReader.setScaledSize` for JPGs; ExifTool `-PreviewImage`/`-JpgFromRaw` for raw-only shots | Fast, with no raw decoding. |
+| Thumbnails | The thumbnail embedded in each file (ExifTool `-ThumbnailImage`, then `-PreviewImage` for RAWs without one), rotated by EXIF Orientation. JPGs with neither are decoded with `QImageReader.setScaledSize`. | Only a few KB per file are read from the card, and no RAW decoding. |
 | Tooling | `uv` (env/deps), `ruff` (lint/format), `pytest` (+ `pytest-qt` later) | |
 | Packaging | PyInstaller single-folder `.exe` (later milestone) | |
 
@@ -111,7 +111,9 @@ tests/             # pytest for core; fixtures with sample files per camera
    - Prompt to register any unknown camera.
 3. **Preview:**
    - Summary per camera, e.g. "Ricoh GR III — 42 new (42 jpg, 42 raw), 310 already imported".
-   - Thumbnail grid of the new photos. A raw+JPG pair shows one thumbnail with a RAW badge.
+   - Thumbnail grid below the summary, loaded in the background in small batches so the first tiles appear quickly. A RAW+JPG pair (same folder, name and capture time) is one tile marked `RAW+JPG`; a RAW-only shot is marked `RAW`.
+   - A *Show* menu switches the grid between *To import* (follows the Include ticks), each skipped group, and *Already imported*. Selecting a camera in the summary limits the grid to that camera. Double-clicking a tile opens the photo in the default viewer. Hovering shows its files, camera and capture time.
+   - Thumbnail loading stops when an import starts, so it doesn't slow the copy.
 4. **Import:** progress bar, then a result summary. Then insert the next card and repeat into the same target folder.
 5. **Settings:** photos root, date format, camera registry editor.
 
@@ -123,7 +125,7 @@ tests/             # pytest for core; fixtures with sample files per camera
    - `photoimporter plan <card>` dry run, run against your real library to prove dedup.
 2. **Minimal PySide6 UI:** target folder picker, manual card browse, plan summary, import with progress. Done.
 3. **Card auto-detect + camera registration dialog.** Done.
-4. **Thumbnail preview grid.**
+4. **Thumbnail preview grid.** Done.
 5. **Settings screen + PyInstaller packaging** with a bundled `exiftool.exe`.
 
 ## Verification
