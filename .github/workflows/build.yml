@@ -31,6 +31,11 @@ jobs:
           if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
             choco install innosetup -y --no-progress
           }
+      - name: Cache the ExifTool download
+        uses: actions/cache@v4
+        with:
+          path: build/exiftool-*_64.zip
+          key: exiftool-${{ hashFiles('packaging/exiftool-version.txt') }}
       - name: Build app, portable zip and installer
         shell: pwsh
         run: ./packaging/build.ps1

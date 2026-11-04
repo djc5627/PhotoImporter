@@ -39,23 +39,29 @@ Invoke-Checked "PyInstaller" {
 # 2. ExifTool, next to the app in dist\PhotoImporter\exiftool
 New-Item -ItemType Directory -Force build | Out-Null
 if (-not $ExifToolZip) {
-    $ExifVersion = (Invoke-WebRequest https://exiftool.org/ver.txt -UseBasicParsing).Content.Trim()
+    # The bundled version is pinned so builds are repeatable. To update ExifTool, change
+    # packaging\exiftool-version.txt (latest: https://exiftool.org/ver.txt).
+    $ExifVersion = (Get-Content packaging\exiftool-version.txt -Raw).Trim()
     $ExifToolZip = "build\exiftool-${ExifVersion}_64.zip"
     if (-not (Test-Path $ExifToolZip)) {
         Write-Host "Downloading ExifTool $ExifVersion"
-        # exiftool.org links its Windows zips to SourceForge; try exiftool.org itself as a fallback.
+        # exiftool.org hosts its Windows zips on SourceForge; exiftool.org itself is a fallback
+        # (it only keeps the latest version).
         $Urls = @(
             "https://sourceforge.net/projects/exiftool/files/exiftool-${ExifVersion}_64.zip/download",
             "https://exiftool.org/exiftool-${ExifVersion}_64.zip"
         )
-        foreach ($Url in $Urls) {
-            try {
-                Invoke-WebRequest $Url -OutFile $ExifToolZip -UseBasicParsing -UserAgent "Wget"
-                break
-            } catch {
-                Write-Warning "Download from $Url failed: $_"
-                Remove-Item -Force $ExifToolZip -ErrorAction SilentlyContinue
+        :download foreach ($Attempt in 1..3) {
+            foreach ($Url in $Urls) {
+                try {
+                    Invoke-WebRequest $Url -OutFile $ExifToolZip -UseBasicParsing -UserAgent "Wget" -TimeoutSec 120
+                    break download
+                } catch {
+                    Write-Warning "Download from $Url failed (attempt $Attempt): $_"
+                    Remove-Item -Force $ExifToolZip -ErrorAction SilentlyContinue
+                }
             }
+            Start-Sleep -Seconds (10 * $Attempt)
         }
         if (-not (Test-Path $ExifToolZip)) { throw "Could not download ExifTool $ExifVersion" }
     }
