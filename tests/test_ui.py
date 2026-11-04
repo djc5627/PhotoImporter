@@ -199,6 +199,27 @@ def test_long_status_does_not_widen_the_window(qtbot, window):
     assert window.status_label.toolTip() == "x" * 1000
 
 
+def test_first_launch_size_fits_the_screen_and_is_centred(window):
+    area = window.screen().availableGeometry()
+    assert window.width() == min(1280, area.width())
+    assert window.height() == min(900, area.height() - 40)
+    assert abs(window.geometry().center().x() - area.center().x()) <= 1
+
+
+def test_window_reopens_where_it_was_closed(qtbot, window):
+    window.show()
+    window.resize(700, 500)
+    db_path = window.db_path
+    window.close()
+    window.close()  # closing twice is harmless
+
+    again = MainWindow(db_path, card_detector=lambda: [], update_checker=None)
+    qtbot.addWidget(again)
+    assert Database(db_path).get_setting("window_geometry")
+    again.show()
+    assert again.size() == window.size()  # (positions aren't reliable without a real screen)
+
+
 def test_import_requires_a_target(qtbot, window, card):
     window.source_edit.setText(str(card))
     with qtbot.waitSignal(window.plan_ready, timeout=10_000):

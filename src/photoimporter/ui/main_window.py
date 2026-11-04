@@ -5,7 +5,7 @@ from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, QThreadPool, QUrl, Signal
+from PySide6.QtCore import QByteArray, QSize, Qt, QThreadPool, QUrl, Signal
 from PySide6.QtGui import QCloseEvent, QDesktopServices, QPainter, QPaintEvent
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -55,6 +55,9 @@ from .import_dialog import ImportConfirmDialog
 from .settings_dialog import SettingsDialog
 from .thumbnail_grid import ThumbnailGrid
 from .workers import BackgroundCall, ReportProgress, Worker
+
+GEOMETRY_SETTING = "window_geometry"
+FIRST_SIZE = QSize(1280, 900)  # fits a 1080p screen with the taskbar and title bar
 
 
 class ElidedLabel(QLabel):
@@ -113,9 +116,9 @@ class MainWindow(QMainWindow):
         self._cancel = threading.Event()
         self._busy = False
         self._pending_card: Path | None = None
+        self._closed = False
 
         self.setWindowTitle("Photo Importer")
-        self.resize(1000, 820)
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.addWidget(self._build_update_bar())
@@ -127,6 +130,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._build_plan_box(), stretch=1)
         layout.addLayout(self._build_footer())
         self.setCentralWidget(central)
+        self._restore_geometry()
 
         self._refresh_library_label()
         self._refresh_target_preview()
@@ -887,10 +891,30 @@ class MainWindow(QMainWindow):
     def _show_error(self, text: str) -> None:
         QMessageBox.warning(self, "Photo Importer", text)
 
+    def _restore_geometry(self) -> None:
+        """Reopen where the window was last closed; the first time, 1280×900, centred."""
+        saved = self.db.get_setting(GEOMETRY_SETTING)
+        if saved and self.restoreGeometry(QByteArray.fromBase64(saved.encode())):
+            return
+        area = self.screen().availableGeometry()
+        # Leave room for the title bar, which isn't part of the window's size.
+        width, height = (
+            min(FIRST_SIZE.width(), area.width()),
+            min(FIRST_SIZE.height(), area.height() - 40),
+        )
+        self.resize(width, height)
+        self.move(area.x() + (area.width() - width) // 2, area.y() + (area.height() - height) // 2)
+
+    def _save_geometry(self) -> None:
+        self.db.set_setting(GEOMETRY_SETTING, bytes(self.saveGeometry().toBase64()).decode())
+
     def closeEvent(self, event: QCloseEvent) -> None:
-        self.card_watcher.stop()
-        self.grid.stop()
-        self._cancel.set()
-        QThreadPool.globalInstance().waitForDone()
-        self.db.close()
+        if not self._closed:  # a window can be closed twice; the database only once
+            self._closed = True
+            self._save_geometry()
+            self.card_watcher.stop()
+            self.grid.stop()
+            self._cancel.set()
+            QThreadPool.globalInstance().waitForDone()
+            self.db.close()
         super().closeEvent(event)
