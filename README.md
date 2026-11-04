@@ -64,6 +64,8 @@ to look at one group, *Size* (or Ctrl+scroll) to make thumbnails bigger or small
 camera dropdown (shown when a card has several cameras) to see only one camera's photos. The first time
 a camera's photos are imported, the app asks which folders to use, pre-filled from where that
 camera's photos already are in your library.
+In *Settings* you can also choose a light or dark appearance (or follow Windows) and an
+accent colour.
 
 Command line:
 
