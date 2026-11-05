@@ -52,20 +52,24 @@ Desktop app:
 uv run photoimporter-gui
 ```
 
-Insert an SD card and the app finds its new photos on its own. Photos already in your library,
-and photos you deleted from it (e.g. in Capture One), are skipped; use the *Include* menu to
-import deleted ones anyway. Photos deleted after your newest remaining photo from a camera (e.g. a
-whole import folder you just deleted) have their own tick, separate from older culls.
+Insert an SD card and the app finds its new photos on its own (or pick a card or folder from
+the card button at the top). The header names the card's cameras and how many photos are new.
+Photos already in your library, and photos you deleted from it (e.g. in Capture One), are
+skipped. The *This import* panel on the right lists each kind of photo with its count: click a
+row to show just those photos, and turn on the switch of a skipped kind (Recently deleted,
+Deleted since import, Probably deleted, Already imported) to import it anyway. Photos deleted
+after your newest remaining photo from a camera (e.g. a whole import folder you just deleted)
+have their own switch, separate from older culls.
 Thumbnails of every photo on the card are shown newest first, grouped by day (click a day's
-header to select all of it), each labelled New, Already
-imported, Deleted and so on. Click photos (Shift-click for a range) to choose exactly what's imported, or select some and
-use *Delete…* to remove them from the SD card (via the Windows Recycle Bin); use *Show*
-to look at one group, *Size* (or Ctrl+scroll) to make thumbnails bigger or smaller, and the
-camera dropdown (shown when a card has several cameras) to see only one camera's photos. The first time
-a camera's photos are imported, the app asks which folders to use, pre-filled from where that
-camera's photos already are in your library.
-In *Settings* you can also choose a light or dark appearance (or follow Windows) and an
-accent colour.
+header to select all of it), each labelled New, Already imported, Deleted and so on. Click
+photos (Shift-click for a range) to choose exactly what's imported, or select some and use
+*Delete…* to remove them from the SD card (via the Windows Recycle Bin); use the size slider (or
+Ctrl+scroll) to make thumbnails bigger or smaller, and the camera dropdown (shown when a card has
+several cameras) to see only one camera's photos. Choose the import folder at the bottom of the
+panel, above the Import button. The first time a camera's photos are imported, the app asks
+which folders to use, pre-filled from where that camera's photos already are in your library.
+In *Settings* you change the library folder, and choose a light or dark appearance (or follow
+Windows) and an accent colour.
 
 Command line:
 
