@@ -285,8 +285,8 @@ class _TileDelegate(QStyledItemDelegate):
             return
         chosen = index.data(CHOSEN_ROLE) or "off"
         hover = bool(option.state & QStyle.StateFlag.State_MouseOver)
-        # Unselected photos are dimmed, a little less under the mouse.
-        dim = (0.7 if hover else 0.45) if chosen == "off" else 1.0
+        # Unselected photos are dimmed a little (less under the mouse), so they stay easy to see.
+        dim = (0.88 if hover else 0.72) if chosen == "off" else 1.0
         card = QRectF(option.rect).adjusted(4, 4, -4, -4)
         surfaces = current_surfaces()
         painter.save()
@@ -315,11 +315,6 @@ class _TileDelegate(QStyledItemDelegate):
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(card.adjusted(1.5, 1.5, -1.5, -1.5), 11, 11)
-            painter.restore()
-        if option.state & QStyle.StateFlag.State_HasFocus:
-            painter.save()
-            painter.setPen(QPen(QColor(colors().focus), 1, Qt.PenStyle.DotLine))
-            painter.drawRect(option.rect.adjusted(1, 1, -2, -2))
             painter.restore()
 
     @staticmethod

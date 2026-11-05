@@ -37,7 +37,6 @@ class Colors:
     warning: str  # text that needs attention, e.g. photos outside the current view
     error: str  # e.g. an invalid date format
     separator: str  # lines, e.g. under day headers
-    focus: str  # the dotted outline of the current tile
     tick_border: str  # an unticked day header
     placeholder_bg: str  # tiles still loading
     placeholder_text: str
@@ -52,7 +51,6 @@ LIGHT = Colors(
     warning="#a15c00",
     error="#b00020",
     separator="#d0d0d0",
-    focus="#888888",
     tick_border="#8a8a8a",
     placeholder_bg="#d8d8d8",
     placeholder_text="#777777",
@@ -67,7 +65,6 @@ DARK = Colors(
     warning="#ffb74d",
     error="#ff6b81",
     separator="#4a4a4a",
-    focus="#9a9a9a",
     tick_border="#9a9a9a",
     placeholder_bg="#3a3a3a",
     placeholder_text="#9a9a9a",
