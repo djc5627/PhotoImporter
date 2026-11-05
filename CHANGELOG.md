@@ -2,6 +2,24 @@
 
 All notable changes to Photo Importer. Each version's section becomes the notes of its [GitHub release](https://github.com/djc5627/PhotoImporter/releases).
 
+## [2.0.0] - 2026-11-05
+
+A redesigned, more modern look. Everything works as before; some controls have moved.
+
+### Changed
+- **New look.** Rounded panels instead of boxes and lines, the Inter font, rounded buttons, text boxes and dropdowns, and in dark mode a background tinted by your accent colour. The app now draws its own controls, so it looks the same on every version of Windows.
+- **Header.** A big title names the card's cameras (e.g. *RICOH GR III & RX100 card*), with how many photos it has, when they were taken and how many are new. Round buttons for *Rescan library* and *Settings*.
+- **Card button.** The *Import from* row is now a button at the top showing the card (e.g. *E:\ SD card*); its menu lists the SD cards found and *Choose a folder…*. Picking one looks for new photos straight away.
+- **"This import" panel** on the right, replacing the summary line, the *Show* dropdown and the *Include* menu:
+  - one row per kind of photo (All on card, To import, New, Recently deleted, Deleted since import, Probably deleted, Already imported) with its count; click a row to show just those photos;
+  - switches on the skipped kinds to import them anyway (the *Already imported* switch allows importing those again and selects them);
+  - *Import into* (New folder / Existing folder), and the big Import button saying where the photos will go.
+- **Library folder** is shown at the bottom of the panel and changed in *Settings*.
+- **Photo tiles** are rounded cards with rounded photos and pill-shaped labels, and light up under the mouse. Unselected photos are dimmed half as much as before, and the dotted outline around the current photo is gone.
+- **Icons** on the toolbar buttons and in the menus.
+- Before a card is chosen, the grid says what to do, with a *Choose a folder…* button.
+- Settings → Cameras and the import confirmation have cleaner tables.
+
 ## [1.4.0] - 2026-11-04
 
 ### Added

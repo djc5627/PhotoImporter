@@ -88,6 +88,7 @@ class ImportConfirmDialog(QDialog):
                 if c == len(values) - 1 or (len(rows) > 1 and r == len(rows) - 1):
                     item.setFont(bold)
                 self.table.setItem(r, c, item)
+        self.table.setShowGrid(False)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)

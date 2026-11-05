@@ -90,7 +90,7 @@ def window(qtbot, tmp_path, library, reader, monkeypatch):
 
 def test_find_then_import_into_new_folder(qtbot, window, card, library):
     window.description_edit.setText("Halloween Hike")
-    window.source_edit.setText(str(card))
+    window.set_source(card)
     folder = library / f"{date.today():%Y.%m.%d} Halloween Hike"
     assert window.target_preview.text() == str(folder)
 
@@ -111,7 +111,7 @@ def test_find_then_import_into_new_folder(qtbot, window, card, library):
 
     with qtbot.waitSignal(window.plan_ready, timeout=10_000):
         window.find_button.click()
-    assert window.status_label.text() == "Nothing new: all 3 photos already imported."
+    assert window.plan.summary() == "Nothing new: all 3 photos already imported."
     assert not window.import_button.isEnabled()
 
 
@@ -120,7 +120,7 @@ def test_import_into_existing_folder(qtbot, window, card, library):
     existing.mkdir()
     window.existing_radio.setChecked(True)
     window.existing_edit.setText(str(existing))
-    window.source_edit.setText(str(card))
+    window.set_source(card)
 
     with qtbot.waitSignal(window.plan_ready, timeout=10_000):
         window.find_button.click()
@@ -139,7 +139,7 @@ def test_old_style_folders_are_left_alone(qtbot, window, card, library):
 
     window.existing_radio.setChecked(True)
     window.existing_edit.setText(str(old))
-    window.source_edit.setText(str(card))
+    window.set_source(card)
     with qtbot.waitSignal(window.plan_ready, timeout=10_000):
         window.find_button.click()
     assert len(window.plan.groups[0].already) == 1
@@ -157,7 +157,7 @@ def test_deleted_photos_are_skipped_until_ticked(qtbot, window, card, library):
     target = library / "2026.11.02 Hike"
     window.existing_radio.setChecked(True)
     window.existing_edit.setText(str(target))
-    window.source_edit.setText(str(card))
+    window.set_source(card)
     with qtbot.waitSignal(window.plan_ready, timeout=10_000):
         window.find_button.click()
     with qtbot.waitSignal(window.import_done, timeout=10_000):
@@ -169,18 +169,20 @@ def test_deleted_photos_are_skipped_until_ticked(qtbot, window, card, library):
         window.find_button.click()
     group = window.plan.groups[0]
     assert [len(group.photos(s)) for s in STATUSES] == [0, 1, 0, 0, 2]
-    assert window.status_label.text() == (
+    assert window.plan.summary() == (
         "0 new photos · 2 already imported · 1 recently deleted (skipped)"
     )
     assert not window.import_button.isEnabled()
-    assert window.in_include_menu(window.include_recent_deleted_check)
-    assert not window.in_include_menu(window.include_deleted_check)
-    assert not window.in_include_menu(window.include_older_check)
-    assert window.include_recent_deleted_check.text() == "Recently deleted (1)"
-    assert window.include_button.text() == "Include"
+    assert window.row_offered("recent_deleted")
+    assert not window.row_offered("deleted")
+    assert not window.row_offered("older")
+    row = window.rows["recent_deleted"]
+    assert (row.number.text(), row.sub.text()) == ("1", "Skipped")
+    assert window.rows["selected"].sub.text() == "Nothing selected"
 
     window.include_recent_deleted_check.click()
-    assert window.include_button.text() == "Include (1)"
+    assert row.sub.text() == "Included"
+    assert window.rows["selected"].sub.text() == "1 recently deleted"
     assert window.import_button.isEnabled()
     assert saved_to(window) == f"ricoh gr iii{os.sep}jpg"
     with qtbot.waitSignal(window.import_done, timeout=10_000):
@@ -189,12 +191,24 @@ def test_deleted_photos_are_skipped_until_ticked(qtbot, window, card, library):
     assert not window.include_recent_deleted_check.isChecked()
 
 
-def test_include_button_is_off_when_every_photo_is_new(qtbot, window, card):
-    window.source_edit.setText(str(card))
+def test_panel_rows_count_and_show_each_kind(qtbot, window, card):
+    assert not window.row_offered("all") and not window.empty_label.isHidden()
+    window.set_source(card)
     with qtbot.waitSignal(window.plan_ready, timeout=10_000):
         window.find_button.click()
-    assert not window.include_button.isEnabled()
-    assert "every photo on this card is new" in window.include_button.toolTip()
+    assert window.empty_label.isHidden()
+    # Every photo is new: no rows for the skipped kinds.
+    assert [k for k in window.rows if window.row_offered(k)] == ["all", "selected", "new"]
+    values = {k: (r.number.text(), r.sub.text()) for k, r in window.rows.items()}
+    assert values["all"] == ("2", "2 selected")
+    assert values["selected"] == ("2", "2 new (3 files)")  # a RAW+JPG pair and a JPG
+    assert window.rows["all"].property("active")
+
+    window.rows["new"].clicked.emit()
+    assert window.grid._view_label() == "New"
+    assert window.rows["new"].property("active") and not window.rows["all"].property("active")
+    window.rows["selected"].clicked.emit()
+    assert window.grid._view_label() == "Selected for import"
 
 
 def test_long_texts_do_not_widen_the_window(qtbot, window, tmp_path):
@@ -203,7 +217,6 @@ def test_long_texts_do_not_widen_the_window(qtbot, window, tmp_path):
     window.db.set_setting("photos_root", str(tmp_path / ("long folder name " * 30)))
     window._refresh_library_label()
     assert window.minimumSizeHint().width() == width
-    assert window.status_label.toolTip() == "x" * 1000
     assert "long folder name" in window.library_label.toolTip()
 
 
@@ -229,7 +242,7 @@ def test_window_reopens_where_it_was_closed(qtbot, window):
 
 
 def test_import_requires_a_target(qtbot, window, card):
-    window.source_edit.setText(str(card))
+    window.set_source(card)
     with qtbot.waitSignal(window.plan_ready, timeout=10_000):
         window.find_button.click()
 
@@ -239,7 +252,7 @@ def test_import_requires_a_target(qtbot, window, card):
 
 
 def test_missing_source_is_reported(window):
-    window.source_edit.setText("")
+    window.set_source(None)
     window.find_button.click()
     assert window.errors == ["Choose an SD card or folder to import from."]
 
@@ -249,7 +262,7 @@ def test_worker_errors_are_shown(qtbot, window, card):
         raise RuntimeError("ExifTool exploded")
 
     window.reader_factory = broken_reader
-    window.source_edit.setText(str(card))
+    window.set_source(card)
 
     with qtbot.waitSignal(window.task_failed, timeout=10_000):
         window.find_button.click()
@@ -261,7 +274,7 @@ def test_worker_errors_are_shown(qtbot, window, card):
 def test_inserting_a_card_finds_new_photos(qtbot, window, card):
     with qtbot.waitSignal(window.plan_ready, timeout=10_000):
         window.cards = [card]
-    assert window.source_edit.text() == str(card)
+    assert window.source() == card
     assert window.plan.new_count == 3
 
     window.cards = []
@@ -272,20 +285,20 @@ def test_inserting_a_card_finds_new_photos(qtbot, window, card):
 def test_card_inserted_while_busy_is_checked_afterwards(qtbot, window, card, tmp_path):
     other = tmp_path / "other"
     (other / "DCIM").mkdir(parents=True)
-    window.source_edit.setText(str(card))
+    window.set_source(card)
     window.find_button.click()
     window.on_card_inserted(other)  # arrives while the first search is running
     assert window._pending_card == other
-    assert window.source_edit.text() == str(card)
+    assert window.source() == card
 
     qtbot.waitUntil(lambda: window.plan is not None and window.plan.source == other, timeout=10_000)
-    assert window.source_edit.text() == str(other)
+    assert window.source() == other
 
 
 def test_new_camera_is_named_before_import(qtbot, window, card, library):
     from photoimporter.core.models import Camera
 
-    window.source_edit.setText(str(card))
+    window.set_source(card)
     with qtbot.waitSignal(window.plan_ready, timeout=10_000):
         window.find_button.click()
     answer = Camera("RICOH IMAGING COMPANY, LTD.", "RICOH GR III", "Ricoh", "ricoh", "JPG", "DNG")
@@ -303,7 +316,7 @@ def test_new_camera_is_named_before_import(qtbot, window, card, library):
 
 def test_cancelling_camera_dialog_cancels_import(qtbot, window, card, monkeypatch):
     monkeypatch.setattr(window, "_ask_camera", lambda group: None)
-    window.source_edit.setText(str(card))
+    window.set_source(card)
     with qtbot.waitSignal(window.plan_ready, timeout=10_000):
         window.find_button.click()
     window.description_edit.setText("Walk")
@@ -318,7 +331,7 @@ def test_cancelling_camera_dialog_cancels_import(qtbot, window, card, monkeypatc
 def test_new_camera_gets_folders_it_already_uses_in_library(qtbot, window, card, library):
     old = library / "10.1.2025 Trip" / "gr3" / "JPEG"
     copy_by_hand(card / "DCIM" / "100RICOH" / "R0000001.JPG", old / "R0000001.JPG")
-    window.source_edit.setText(str(card))
+    window.set_source(card)
     with qtbot.waitSignal(window.plan_ready, timeout=10_000):
         window.find_button.click()
 
@@ -347,7 +360,7 @@ def test_camera_dialog_cleans_folder_names(qtbot):
 
 
 def test_thumbnail_grid_shows_raw_jpg_pairs_once(qtbot, window, card):
-    window.source_edit.setText(str(card))
+    window.set_source(card)
     with qtbot.waitSignal(window.grid.thumbnails_loaded, timeout=10_000):
         window.find_button.click()
 
@@ -365,7 +378,7 @@ def test_size_slider_switches_to_large_previews_and_is_remembered(qtbot, window,
     from PySide6.QtGui import QWheelEvent
     from PySide6.QtWidgets import QApplication
 
-    window.source_edit.setText(str(card))
+    window.set_source(card)
     with qtbot.waitSignal(window.grid.thumbnails_loaded, timeout=10_000):
         window.find_button.click()
     grid = window.grid
@@ -409,12 +422,12 @@ def test_size_slider_switches_to_large_previews_and_is_remembered(qtbot, window,
 @pytest.mark.parametrize(
     ("index", "width", "columns"),
     [
-        (1, 1240, 7),  # 7.05 tiles of 180 px: 7, stretched a little
-        (1, 1150, 6),  # 6.4: 6
-        (1, 1080, 6),  # exactly 6
-        (1, 1170, 7),  # 6.5: at least half of a 7th fits, so 7, shrunk a little
+        (1, 1240, 7),  # 6.6 tiles of 188 px (160 + padding): 7, shrunk a little
+        (1, 1150, 6),  # 6.1: 6, stretched a little
+        (1, 1128, 6),  # exactly 6
+        (1, 1222, 7),  # 6.5: at least half of a 7th fits, so 7, shrunk a little
         (2, 1240, 4),  # Large 3.6 tiles: 4
-        (0, 1240, 9),  # Small 8.9: 9
+        (0, 1240, 8),  # Small 8.4: 8
         (1, 100, 1),  # never fewer than one
     ],
 )
@@ -432,7 +445,7 @@ def test_tiles_resize_with_the_window(qtbot, window, card):
 
     for i in range(3, 20):  # enough photos for a full row
         make_file(card / "DCIM" / "100RICOH" / f"R00000{i:02d}.JPG", f"jpg{i}".encode())
-    window.source_edit.setText(str(card))
+    window.set_source(card)
     with qtbot.waitSignal(window.grid.thumbnails_loaded, timeout=10_000):
         window.find_button.click()
     grid = window.grid
@@ -468,7 +481,7 @@ def test_photos_are_grouped_under_day_headers(qtbot, window, card, reader):
     ):
         make_file(card / "DCIM" / "100RICOH" / name, b"jpg")
         reader.metas[name.lower()] = PhotoMeta(**RICOH, capture_time=when)
-    window.source_edit.setText(str(card))
+    window.set_source(card)
     with qtbot.waitSignal(window.plan_ready, timeout=10_000):
         window.find_button.click()
     grid = window.grid
@@ -519,7 +532,7 @@ def find_with_sony_and_one_imported(qtbot, window, card, library):
 
     make_file(card / "DCIM" / "100MSDCF" / "DSC00001.JPG", b"sony-jpg")
     copy_by_hand(card / "DCIM" / "100RICOH" / "R0000002.JPG", library / "x" / "R0000002.JPG")
-    window.source_edit.setText(str(card))
+    window.set_source(card)
     with qtbot.waitSignal(window.plan_ready, timeout=10_000):
         window.find_button.click()
     return window.grid
@@ -584,7 +597,7 @@ def test_clicking_toggles_photos(qtbot, window, card, library):
 
     mouse_click(qtbot, grid, "DSC00001")
     assert chosen(grid)["DSC00001"] == "off"
-    assert window.status_label.text() == (
+    assert window.plan.summary() == (
         "1 new photo (0 selected) · 1 already imported · 2 probably deleted (included)"
     )
     assert window.import_button.text() == "Import 1 photo (2 files)"
@@ -596,7 +609,7 @@ def test_clicking_toggles_photos(qtbot, window, card, library):
     assert set(chosen(grid).values()) == {"on"}
     # The already-imported photo is selected (e.g. to delete it) but not imported again.
     assert window.import_button.text() == "Import 2 photos (3 files)"
-    assert "to import again" not in window.status_label.text()
+    assert "to import again" not in window.plan.summary()
 
 
 def test_shift_click_selects_a_range(qtbot, window, card, library):
@@ -643,21 +656,20 @@ def test_include_tick_shows_partial_and_selects_the_whole_group(qtbot, window, c
     window._refresh_selection_view()
     assert chosen(grid)["R0000001"] == "part"
     assert window.include_older_check.checkState() == Qt.CheckState.PartiallyChecked
-    assert "2 probably deleted (1 included)" in window.status_label.text()
+    assert "2 probably deleted (1 included)" in window.plan.summary()
 
 
 def test_reimporting_needs_permission(qtbot, window, card, library):
     grid = find_with_sony_and_one_imported(qtbot, window, card, library)
-    assert window.in_include_menu(window.allow_reimport_check)
-    assert not window.in_include_menu(window.include_already_check)
+    assert window.row_offered("already")
+    assert window.rows["already"].sub.text() == "In your library"
     mouse_click(qtbot, grid, "R0000002")
     assert window.import_button.text() == "Import 1 photo"  # just DSC00001
 
     window.allow_reimport_check.click()
-    assert window.in_include_menu(window.include_already_check)
-    assert window.include_already_check.checkState() == Qt.CheckState.Checked
+    assert window.rows["already"].sub.text() == "Importing again"
     assert window.import_button.text() == "Import 2 photos"
-    assert "1 already imported (1 to import again)" in window.status_label.text()
+    assert "1 already imported (1 to import again)" in window.plan.summary()
 
     window.allow_reimport_check.click()
     assert window.import_button.text() == "Import 1 photo"
@@ -732,7 +744,7 @@ def test_settings_dialog_saves_general_settings_and_cameras(qtbot, window, libra
 def test_settings_changes_apply_to_the_open_plan(qtbot, window, card, monkeypatch):
     from photoimporter.core.models import Camera
 
-    window.source_edit.setText(str(card))
+    window.set_source(card)
     with qtbot.waitSignal(window.plan_ready, timeout=10_000):
         window.find_button.click()
     assert window.plan.groups[0].camera.nickname == "RICOH GR III"
@@ -756,7 +768,7 @@ def test_settings_changes_apply_to_the_open_plan(qtbot, window, card, monkeypatc
 def test_card_insert_can_just_fill_in_the_source(qtbot, window, card):
     window.db.set_setting("find_on_insert", "0")
     window.cards = [card]
-    qtbot.waitUntil(lambda: window.source_edit.text() == str(card), timeout=5_000)
+    qtbot.waitUntil(lambda: window.source() == card, timeout=5_000)
     assert window.plan is None
     assert window.status_label.text() == f"Card inserted: {card}. Click Find new photos."
 
@@ -837,7 +849,7 @@ def test_import_confirmation_lists_cameras_and_categories(qtbot, window, card, l
 
 def test_cancelling_the_import_confirmation_keeps_the_selection(qtbot, window, card, monkeypatch):
     monkeypatch.setattr(window, "_confirm_import", lambda breakdown, target: False)
-    window.source_edit.setText(str(card))
+    window.set_source(card)
     with qtbot.waitSignal(window.plan_ready, timeout=10_000):
         window.find_button.click()
     window.description_edit.setText("Walk")
@@ -961,3 +973,48 @@ def test_accent_colour_is_chosen_in_settings_and_used(qtbot, window, qapp, light
     assert accent_choice(window.db) == "system"
     window.db.set_setting("accent", "chartreuse")
     assert accent_choice(window.db) == "blue"  # unknown values fall back
+
+
+def test_modern_style_uses_bundled_font_and_accent(qtbot, window, qapp, light_afterwards):
+    from photoimporter.core.config import ACCENTS
+    from photoimporter.ui.theme import FONT_FAMILY, load_fonts
+
+    assert load_fonts()  # the bundled Inter files
+    assert qapp.font().family() == FONT_FAMILY
+    assert "QFrame#panel" in qapp.styleSheet()
+    window.db.set_setting("accent", "purple")
+    window._apply_settings()
+    assert ACCENTS["purple"] in qapp.styleSheet()
+    assert window.centralWidget().objectName() == "central"
+
+
+def test_header_names_the_card_and_its_menu_picks_a_card(qtbot, window, card, monkeypatch):
+    assert window.title_label.text() == "Photo Importer"
+    assert window.card_button.text() == "Choose a card"
+    window.cards = [card]
+    monkeypatch.setattr("photoimporter.ui.main_window.find_on_insert", lambda db: False)
+    window._fill_card_menu()
+    actions = [a.text() for a in window.card_menu.actions() if a.text()]
+    assert actions == [f"{card}  SD card", "Choose a folder…"]
+
+    with qtbot.waitSignal(window.plan_ready, timeout=10_000):
+        window.card_menu.actions()[0].trigger()
+    assert window.source() == card
+    assert window.card_button.text() == card.name  # a folder in the tests, not a drive
+    assert window.title_label.text() == "RICOH GR III"
+    assert window.subtitle_label.text() == ("2 photos taken Nov 2 · 2 new since your last import")
+
+
+def test_grid_explains_what_to_do_before_a_card_and_on_an_empty_card(qtbot, window, tmp_path):
+    grid = window.grid
+    assert not grid.empty_view.isHidden() and grid.list.isHidden()
+    assert grid.empty_title.text() == "Insert an SD card"
+    assert not grid.empty_button.isHidden()
+
+    empty = tmp_path / "empty card"
+    (empty / "DCIM").mkdir(parents=True)
+    window.set_source(empty)
+    with qtbot.waitSignal(window.plan_ready, timeout=10_000):
+        window.find_button.click()
+    assert grid.empty_title.text() == "No photos on this card"
+    assert grid.empty_button.isHidden()

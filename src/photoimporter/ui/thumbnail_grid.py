@@ -29,6 +29,7 @@ from PySide6.QtGui import (
     QImage,
     QImageReader,
     QPainter,
+    QPainterPath,
     QPalette,
     QPen,
     QPixmap,
@@ -37,6 +38,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QListView,
@@ -54,14 +56,14 @@ from PySide6.QtWidgets import (
 from ..core.models import PhotoFile
 from ..core.planner import STATUS_LABELS, STATUSES, CameraGroup, ImportPlan
 from ..core.thumbnails import Shot, Thumbnail, ThumbnailSource, group_shots
-from .theme import accent, colors, muted
+from .theme import accent, colors, current_surfaces, icon, muted, set_icon
 
 # Tile sizes for the size slider. Large uses the cameras' bigger embedded preview.
 SIZES = [("Small", QSize(120, 90)), ("Medium", QSize(160, 120)), ("Large", QSize(320, 240))]
 DEFAULT_SIZE = 1
 SMALL_IMAGE = QSize(160, 120)  # what the camera's small thumbnail gives
 LARGE_IMAGE = QSize(384, 288)  # room for Large tiles stretched to fill the row
-TILE_PADDING = QSize(20, 40)  # around the image: the border and the file name
+TILE_PADDING = QSize(28, 54)  # around the image: the border and the file name
 
 
 def _is_large(size: QSize) -> bool:
@@ -210,11 +212,13 @@ def _with_status(pixmap: QPixmap, status: str, size: QSize) -> QPixmap:
     result.fill(Qt.GlobalColor.transparent)
     painter = QPainter(result)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.drawPixmap(
-        (size.width() - pixmap.width()) // 2,
-        (size.height() - pixmap.height()) // 2,
-        pixmap,
-    )
+    left = (size.width() - pixmap.width()) // 2
+    top = (size.height() - pixmap.height()) // 2
+    clip = QPainterPath()  # rounded corners on the photo
+    clip.addRoundedRect(QRectF(left, top, pixmap.width(), pixmap.height()), 8, 8)
+    painter.setClipPath(clip)
+    painter.drawPixmap(left, top, pixmap)
+    painter.setClipping(False)
     font = painter.font()
     font.setPointSizeF(max(font.pointSizeF() - 1, 7))
     font.setBold(True)
@@ -224,9 +228,10 @@ def _with_status(pixmap: QPixmap, status: str, size: QSize) -> QPixmap:
     height = painter.fontMetrics().height() + 2
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(QColor(STATUS_COLORS[status]))
-    painter.drawRoundedRect(3, 3, width, height, 4, 4)
+    x, y = left + 6, top + 6  # a pill on the photo's corner
+    painter.drawRoundedRect(QRectF(x, y, width + 4, height), height / 2, height / 2)
     painter.setPen(QColor("white"))
-    painter.drawText(3, 3, width, height, Qt.AlignmentFlag.AlignCenter, text)
+    painter.drawText(x, y, width + 4, height, Qt.AlignmentFlag.AlignCenter, text)
     painter.end()
     return result
 
@@ -279,27 +284,54 @@ class _TileDelegate(QStyledItemDelegate):
             self._paint_header(painter, option, header, index.data(CHOSEN_ROLE) or "off")
             return
         chosen = index.data(CHOSEN_ROLE) or "off"
-        opt = QStyleOptionViewItem(option)
-        opt.state &= ~(QStyle.StateFlag.State_Selected | QStyle.StateFlag.State_HasFocus)
+        hover = bool(option.state & QStyle.StateFlag.State_MouseOver)
+        # Unselected photos are dimmed a little (less under the mouse), so they stay easy to see.
+        dim = (0.88 if hover else 0.72) if chosen == "off" else 1.0
+        card = QRectF(option.rect).adjusted(4, 4, -4, -4)
+        surfaces = current_surfaces()
         painter.save()
-        if chosen == "off":
-            painter.setOpacity(0.45)
-        super().paint(painter, opt, index)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor(surfaces.line), 1) if hover else Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(surfaces.field_hover if hover else surfaces.tile))
+        painter.setOpacity(dim)
+        painter.drawRoundedRect(card, 12, 12)
+        painter.restore()
+        # The photo and its name, inside the card with a margin, so a photo that fills its
+        # whole area never runs under the selection outline.
+        name_height = option.fontMetrics.height() + 8
+        photo_area = card.adjusted(9, 9, -9, -(name_height + 2)).toRect()
+        painter.save()
+        painter.setOpacity(dim)
+        photo = index.data(Qt.ItemDataRole.DecorationRole)
+        if isinstance(photo, QIcon):
+            pixmap = photo.pixmap(photo_area.size())
+            size = pixmap.deviceIndependentSize().toSize()
+            painter.drawPixmap(
+                photo_area.x() + (photo_area.width() - size.width()) // 2,
+                photo_area.y() + (photo_area.height() - size.height()) // 2,
+                pixmap,
+            )
+        name_rect = QRectF(
+            card.left() + 6, card.bottom() - name_height - 4, card.width() - 12, name_height
+        )
+        painter.setPen(option.palette.color(QPalette.ColorRole.Text))
+        painter.setFont(option.font)
+        name = option.fontMetrics.elidedText(
+            str(index.data(Qt.ItemDataRole.DisplayRole) or ""),
+            Qt.TextElideMode.ElideRight,
+            int(name_rect.width()),
+        )
+        painter.drawText(name_rect, int(Qt.AlignmentFlag.AlignCenter), name)
         painter.restore()
         if chosen != "off":
             painter.save()
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            pen = QPen(accent(), 4)
+            pen = QPen(accent(), 3)
             if chosen == "part":
                 pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRoundedRect(QRectF(option.rect).adjusted(3, 3, -3, -3), 6, 6)
-            painter.restore()
-        if option.state & QStyle.StateFlag.State_HasFocus:
-            painter.save()
-            painter.setPen(QPen(QColor(colors().focus), 1, Qt.PenStyle.DotLine))
-            painter.drawRect(option.rect.adjusted(1, 1, -2, -2))
+            painter.drawRoundedRect(card.adjusted(1.5, 1.5, -1.5, -1.5), 11, 11)
             painter.restore()
 
     @staticmethod
@@ -345,8 +377,6 @@ class _TileDelegate(QStyledItemDelegate):
             int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
             header.counts,
         )
-        painter.setPen(QPen(QColor(colors().separator), 1))
-        painter.drawLine(rect.left() + 4, rect.bottom(), rect.right() - 4, rect.bottom())
         painter.restore()
 
 
@@ -390,13 +420,13 @@ class ThumbnailGrid(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         row = self.toolbar = QHBoxLayout()  # the window adds its own controls here too
-        row.addWidget(QLabel("Show:"))
+        self.show_label = QLabel("Show:")
+        row.addWidget(self.show_label)
         self.view_combo = QComboBox()
         self.view_combo.currentIndexChanged.connect(self._rebuild)
         row.addWidget(self.view_combo)
         self.count_label = QLabel()
         muted(self.count_label)
-        row.addWidget(self.count_label, stretch=1)
         self.select_all_button = QPushButton("Select all")
         self.select_all_button.setToolTip("Select every photo shown (Ctrl+A)")
         self.select_all_button.clicked.connect(lambda: self._choose_shown(True))
@@ -406,6 +436,12 @@ class ThumbnailGrid(QWidget):
         self.delete_button = QPushButton("Delete…")
         self.delete_button.setToolTip("Delete the selected photos shown from the SD card (Delete)")
         self.delete_button.clicked.connect(self.delete_requested)
+        for button, name in (
+            (self.select_all_button, "square-check"),
+            (self.select_none_button, "square"),
+            (self.delete_button, "trash-2"),
+        ):
+            set_icon(button, name)
         self.size_slider = QSlider(Qt.Orientation.Horizontal)
         self.size_slider.setRange(0, len(SIZES) - 1)
         self.size_slider.setPageStep(1)
@@ -415,15 +451,24 @@ class ThumbnailGrid(QWidget):
         self.size_slider.valueChanged.connect(self.set_thumbnail_size)
         self.size_label = QLabel()
         self.size_label.setMinimumWidth(QLabel("Medium").sizeHint().width())
-        row.addWidget(QLabel("Size:"))
-        row.addWidget(self.size_slider)
-        row.addWidget(self.size_label)
-        row.addSpacing(8)
+        size_icon = QLabel()
+        size_icon.setToolTip("Thumbnail size")
+        size_icon.setPixmap(icon("zoom-in").pixmap(16, 16))
+        self._size_icon = size_icon
+        # [Show] [camera, added by the window] Select all, none, Delete … count … size
         for button in (self.select_all_button, self.select_none_button, self.delete_button):
             row.addWidget(button)
+        row.addWidget(self.count_label)
+        row.addStretch(1)
+        row.addWidget(size_icon)
+        row.addWidget(self.size_slider)
+        row.addWidget(self.size_label)
         layout.addLayout(row)
 
         self.list = QListWidget()
+        self.list.setObjectName("thumbnails")
+        self.list.setMouseTracking(True)  # for the hover highlight
+        self.list.viewport().setAttribute(Qt.WidgetAttribute.WA_Hover)
         self.list.setViewMode(QListView.ViewMode.IconMode)
         self.list.setResizeMode(QListView.ResizeMode.Adjust)
         self.list.setMovement(QListView.Movement.Static)
@@ -439,7 +484,13 @@ class ThumbnailGrid(QWidget):
         self.list.viewport().installEventFilter(self)  # Ctrl+scroll and resizes arrive here
         # Always there, so it appearing doesn't change the width and the columns.
         self.list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-        layout.addWidget(self.list)
+        panel = QFrame()
+        panel.setObjectName("panel")  # a rounded panel behind the thumbnails
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(10, 4, 4, 10)
+        panel_layout.addWidget(self.list)
+        panel_layout.addWidget(self._build_empty_view())
+        layout.addWidget(panel)
         self._apply_size()
         self._refresh_buttons()
 
@@ -458,7 +509,46 @@ class ThumbnailGrid(QWidget):
         self.plan = plan
         self.groups = list(groups or (plan.groups if plan else []))
         self._refresh_combo()
+        self._refresh_empty_view()
         self._rebuild()
+
+    def _build_empty_view(self) -> QWidget:
+        """What the grid shows before a card is chosen, or when it has no photos."""
+        self.empty_view = QWidget()
+        outer = QVBoxLayout(self.empty_view)
+        outer.addStretch(1)
+        self.empty_icon = QLabel()
+        self.empty_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_title = QLabel()
+        self.empty_title.setObjectName("emptyTitle")
+        self.empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_text = muted(QLabel())
+        self.empty_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_text.setWordWrap(True)
+        self.empty_button = QPushButton("Choose a folder…")
+        set_icon(self.empty_button, "folder-open")
+        for widget in (self.empty_icon, self.empty_title, self.empty_text):
+            outer.addWidget(widget)
+        outer.addSpacing(8)
+        outer.addWidget(self.empty_button, alignment=Qt.AlignmentFlag.AlignCenter)
+        outer.addStretch(2)
+        self._refresh_empty_view()
+        return self.empty_view
+
+    def _refresh_empty_view(self) -> None:
+        empty_card = self.plan is not None and not self.plan.photos()
+        self.empty_view.setVisible(self.plan is None or empty_card)
+        self.list.setVisible(not self.empty_view.isVisibleTo(self))
+        if empty_card:
+            self.empty_title.setText("No photos on this card")
+            self.empty_text.setText("There are no JPG or RAW files on it.")
+        else:
+            self.empty_title.setText("Insert an SD card")
+            self.empty_text.setText(
+                "Photo Importer shows what's on it and which photos\naren't in your library yet."
+            )
+        self.empty_button.setVisible(not empty_card)
+        self.empty_icon.setPixmap(icon("hard-drive", 44, current_surfaces().muted).pixmap(44, 44))
 
     @property
     def nominal_size(self) -> QSize:
@@ -654,6 +744,8 @@ class ThumbnailGrid(QWidget):
 
     def restyle(self) -> None:
         """Redraw for a new light/dark palette (placeholder tiles have their own colours)."""
+        self._size_icon.setPixmap(icon("zoom-in").pixmap(16, 16))
+        self._refresh_empty_view()
         self._fit(force=True)
         self.list.viewport().update()
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from pathlib import Path
 
 from .models import Camera, PhotoFile, PhotoKey
@@ -308,3 +309,59 @@ def import_breakdown(plan: ImportPlan, shown: set[Path] | None = None) -> Import
     for shot in group_shots(left_out):
         not_importing[_shot_status(shot.photos, statuses)] += 1
     return ImportBreakdown(cameras, files, hidden, not_importing)
+
+
+def card_title(plan: ImportPlan | None, source: Path | None) -> str:
+    """A heading for what's being imported: its cameras, e.g. "RICOH GR III & RX100 card"."""
+    if plan is not None and plan.groups:
+        names = [
+            g.camera.nickname
+            for g in sorted(plan.groups, key=lambda g: len(g.photos()), reverse=True)
+        ]
+        if len(names) > 2:
+            names = [names[0], names[1], f"{len(names) - 2} more"]
+        text = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " & " + names[-1]
+        return text + (" card" if source is not None and _is_drive(source) else "")
+    if source is None:
+        return "Photo Importer"
+    if _is_drive(source):
+        return f"SD card ({source.drive or source})"
+    return source.name or str(source)
+
+
+def _is_drive(path: Path) -> bool:
+    """Whether `path` is a whole drive (e.g. E:\\), as an SD card usually is."""
+    return path == Path(path.anchor) and bool(path.anchor)
+
+
+def _day(capture_time: str) -> date | None:
+    try:
+        return datetime.strptime(capture_time[:10], "%Y:%m:%d").date()
+    except ValueError:
+        return None
+
+
+def _when(first: date, last: date) -> str:
+    def short(d: date, year: bool) -> str:
+        return f"{d:%b} {d.day}" + (f", {d.year}" if year else "")
+
+    if first == last:
+        return short(first, False)
+    same_year = first.year == last.year
+    return f"{short(first, not same_year)} – {short(last, not same_year)}"
+
+
+def card_subtitle(plan: ImportPlan | None) -> str:
+    """E.g. "13 photos taken Oct 12 – Oct 20 · 7 new since your last import"."""
+    if plan is None:
+        return "Insert an SD card, or choose a card or folder."
+    from .thumbnails import group_shots  # here to avoid an import cycle
+
+    shots = group_shots(plan.photos())
+    days = sorted(d for s in shots if s.capture_time and (d := _day(s.capture_time)))
+    count = f"{len(shots)} photo{'s' if len(shots) != 1 else ''}"
+    if days:
+        count += f" taken {_when(days[0], days[-1])}"
+    new = len(group_shots(plan.photos("new")))
+    news = f"{new} new since your last import" if new else "nothing new since your last import"
+    return f"{count} · {news}"
