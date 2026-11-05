@@ -402,13 +402,13 @@ class ThumbnailGrid(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         row = self.toolbar = QHBoxLayout()  # the window adds its own controls here too
-        row.addWidget(QLabel("Show:"))
+        self.show_label = QLabel("Show:")
+        row.addWidget(self.show_label)
         self.view_combo = QComboBox()
         self.view_combo.currentIndexChanged.connect(self._rebuild)
         row.addWidget(self.view_combo)
         self.count_label = QLabel()
         muted(self.count_label)
-        row.addWidget(self.count_label, stretch=1)
         self.select_all_button = QPushButton("Select all")
         self.select_all_button.setToolTip("Select every photo shown (Ctrl+A)")
         self.select_all_button.clicked.connect(lambda: self._choose_shown(True))
@@ -437,12 +437,14 @@ class ThumbnailGrid(QWidget):
         size_icon.setToolTip("Thumbnail size")
         size_icon.setPixmap(icon("zoom-in").pixmap(16, 16))
         self._size_icon = size_icon
+        # [Show] [camera, added by the window] Select all, none, Delete … count … size
+        for button in (self.select_all_button, self.select_none_button, self.delete_button):
+            row.addWidget(button)
+        row.addWidget(self.count_label)
+        row.addStretch(1)
         row.addWidget(size_icon)
         row.addWidget(self.size_slider)
         row.addWidget(self.size_label)
-        row.addSpacing(8)
-        for button in (self.select_all_button, self.select_none_button, self.delete_button):
-            row.addWidget(button)
         layout.addLayout(row)
 
         self.list = QListWidget()

@@ -268,6 +268,22 @@ def icon_file(name: str, color: str, width: float = 2.5) -> str:
     return path.as_posix()
 
 
+def switch_file(track: str, knob: str, position: str) -> str:
+    """An on/off switch image (36x20) with the knob "left", "middle" or "right"."""
+    global _icon_dir
+    if _icon_dir is None:
+        _icon_dir = Path(tempfile.mkdtemp(prefix="photoimporter-icons-"))
+    path = _icon_dir / f"switch-{track.lstrip('#')}-{knob.lstrip('#')}-{position}.svg"
+    if not path.exists():
+        x = {"left": 10, "middle": 18, "right": 26}[position]
+        path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="36" height="20" viewBox="0 0 36 20">'
+            f'<rect x="0.5" y="0.5" width="35" height="19" rx="9.5" fill="{track}"/>'
+            f'<circle cx="{x}" cy="10" r="7" fill="{knob}"/></svg>'
+        )
+    return path.as_posix()
+
+
 def stylesheet(dark: bool, accent: QColor) -> str:
     """The app-wide style: rounded panels, fields and buttons on layered surfaces."""
     s = surfaces(dark, accent)
@@ -281,6 +297,30 @@ QMainWindow, QDialog {{ background: {s.bg}; }}
 }}
 QFrame#panel {{ background: {s.panel}; border: 1px solid {s.line}; border-radius: 16px; }}
 QLabel#title {{ font-size: 19pt; font-weight: 700; }}
+QLabel#panelTitle {{ font-size: 13pt; font-weight: 600; padding: 2px 4px 6px 4px; }}
+QLabel#section {{ color: {s.muted}; font-size: 8pt; font-weight: 600; letter-spacing: 1px;
+  padding: 10px 4px 2px 4px; }}
+QFrame#categoryRow {{ background: transparent; border: 1px solid transparent;
+  border-radius: 12px; }}
+QFrame#categoryRow:hover {{ background: {s.field}; }}
+QFrame#categoryRow[active="true"] {{ background: {mix(s.panel, accent, 0.14)};
+  border: 1px solid {mix(s.panel, accent, 0.55)}; }}
+QLabel#chip {{ background: {s.field}; border-radius: 17px; }}
+QLabel#rowNumber {{ font-size: 13pt; font-weight: 700; }}
+QLabel#rowLabel {{ font-weight: 500; }}
+QLabel#rowSub {{ font-size: 8.5pt; }}
+QLabel#small {{ font-size: 8.5pt; }}
+QCheckBox#switch::indicator {{ width: 36px; height: 20px; border: none; background: transparent;
+  image: url({switch_file(s.line, s.muted, "left")}); }}
+QCheckBox#switch::indicator:checked {{ image: url({switch_file(a, "#ffffff", "right")}); }}
+QCheckBox#switch::indicator:indeterminate {{
+  image: url({switch_file(mix(s.panel, accent, 0.6), "#ffffff", "middle")}); }}
+QCheckBox#switch::indicator:disabled {{ image: url({switch_file(s.line, s.disabled, "left")}); }}
+QFrame#segment {{ background: {s.field}; border: 1px solid {s.line}; border-radius: 10px; }}
+QPushButton#segment {{ padding: 6px 0; border-radius: 8px; border: none; background: transparent;
+  color: {s.muted}; font-weight: 500; min-height: 18px; }}
+QPushButton#segment:hover {{ color: {s.text}; }}
+QPushButton#segment:checked {{ background: {s.panel}; color: {s.text}; }}
 QToolButton#roundButton {{ border-radius: 18px; padding: 0; min-width: 36px; max-width: 36px;
   min-height: 36px; max-height: 36px; }}
 QToolButton#cardButton {{ border-radius: 18px; padding: 8px 30px 8px 14px; font-weight: 500; }}

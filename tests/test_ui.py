@@ -111,7 +111,7 @@ def test_find_then_import_into_new_folder(qtbot, window, card, library):
 
     with qtbot.waitSignal(window.plan_ready, timeout=10_000):
         window.find_button.click()
-    assert window.status_label.text() == "Nothing new: all 3 photos already imported."
+    assert window.plan.summary() == "Nothing new: all 3 photos already imported."
     assert not window.import_button.isEnabled()
 
 
@@ -169,18 +169,20 @@ def test_deleted_photos_are_skipped_until_ticked(qtbot, window, card, library):
         window.find_button.click()
     group = window.plan.groups[0]
     assert [len(group.photos(s)) for s in STATUSES] == [0, 1, 0, 0, 2]
-    assert window.status_label.text() == (
+    assert window.plan.summary() == (
         "0 new photos · 2 already imported · 1 recently deleted (skipped)"
     )
     assert not window.import_button.isEnabled()
-    assert window.in_include_menu(window.include_recent_deleted_check)
-    assert not window.in_include_menu(window.include_deleted_check)
-    assert not window.in_include_menu(window.include_older_check)
-    assert window.include_recent_deleted_check.text() == "Recently deleted (1)"
-    assert window.include_button.text() == "Include"
+    assert window.row_offered("recent_deleted")
+    assert not window.row_offered("deleted")
+    assert not window.row_offered("older")
+    row = window.rows["recent_deleted"]
+    assert (row.number.text(), row.sub.text()) == ("1", "Skipped")
+    assert window.rows["selected"].sub.text() == "Nothing selected"
 
     window.include_recent_deleted_check.click()
-    assert window.include_button.text() == "Include (1)"
+    assert row.sub.text() == "Included"
+    assert window.rows["selected"].sub.text() == "1 recently deleted"
     assert window.import_button.isEnabled()
     assert saved_to(window) == f"ricoh gr iii{os.sep}jpg"
     with qtbot.waitSignal(window.import_done, timeout=10_000):
@@ -189,12 +191,24 @@ def test_deleted_photos_are_skipped_until_ticked(qtbot, window, card, library):
     assert not window.include_recent_deleted_check.isChecked()
 
 
-def test_include_button_is_off_when_every_photo_is_new(qtbot, window, card):
+def test_panel_rows_count_and_show_each_kind(qtbot, window, card):
+    assert not window.row_offered("all") and not window.empty_label.isHidden()
     window.set_source(card)
     with qtbot.waitSignal(window.plan_ready, timeout=10_000):
         window.find_button.click()
-    assert not window.include_button.isEnabled()
-    assert "every photo on this card is new" in window.include_button.toolTip()
+    assert window.empty_label.isHidden()
+    # Every photo is new: no rows for the skipped kinds.
+    assert [k for k in window.rows if window.row_offered(k)] == ["all", "selected", "new"]
+    values = {k: (r.number.text(), r.sub.text()) for k, r in window.rows.items()}
+    assert values["all"] == ("2", "2 selected")
+    assert values["selected"] == ("2", "2 new (3 files)")  # a RAW+JPG pair and a JPG
+    assert window.rows["all"].property("active")
+
+    window.rows["new"].clicked.emit()
+    assert window.grid._view_label() == "New"
+    assert window.rows["new"].property("active") and not window.rows["all"].property("active")
+    window.rows["selected"].clicked.emit()
+    assert window.grid._view_label() == "Selected for import"
 
 
 def test_long_texts_do_not_widen_the_window(qtbot, window, tmp_path):
@@ -203,7 +217,6 @@ def test_long_texts_do_not_widen_the_window(qtbot, window, tmp_path):
     window.db.set_setting("photos_root", str(tmp_path / ("long folder name " * 30)))
     window._refresh_library_label()
     assert window.minimumSizeHint().width() == width
-    assert window.status_label.toolTip() == "x" * 1000
     assert "long folder name" in window.library_label.toolTip()
 
 
@@ -584,7 +597,7 @@ def test_clicking_toggles_photos(qtbot, window, card, library):
 
     mouse_click(qtbot, grid, "DSC00001")
     assert chosen(grid)["DSC00001"] == "off"
-    assert window.status_label.text() == (
+    assert window.plan.summary() == (
         "1 new photo (0 selected) · 1 already imported · 2 probably deleted (included)"
     )
     assert window.import_button.text() == "Import 1 photo (2 files)"
@@ -596,7 +609,7 @@ def test_clicking_toggles_photos(qtbot, window, card, library):
     assert set(chosen(grid).values()) == {"on"}
     # The already-imported photo is selected (e.g. to delete it) but not imported again.
     assert window.import_button.text() == "Import 2 photos (3 files)"
-    assert "to import again" not in window.status_label.text()
+    assert "to import again" not in window.plan.summary()
 
 
 def test_shift_click_selects_a_range(qtbot, window, card, library):
@@ -643,21 +656,20 @@ def test_include_tick_shows_partial_and_selects_the_whole_group(qtbot, window, c
     window._refresh_selection_view()
     assert chosen(grid)["R0000001"] == "part"
     assert window.include_older_check.checkState() == Qt.CheckState.PartiallyChecked
-    assert "2 probably deleted (1 included)" in window.status_label.text()
+    assert "2 probably deleted (1 included)" in window.plan.summary()
 
 
 def test_reimporting_needs_permission(qtbot, window, card, library):
     grid = find_with_sony_and_one_imported(qtbot, window, card, library)
-    assert window.in_include_menu(window.allow_reimport_check)
-    assert not window.in_include_menu(window.include_already_check)
+    assert window.row_offered("already")
+    assert window.rows["already"].sub.text() == "In your library"
     mouse_click(qtbot, grid, "R0000002")
     assert window.import_button.text() == "Import 1 photo"  # just DSC00001
 
     window.allow_reimport_check.click()
-    assert window.in_include_menu(window.include_already_check)
-    assert window.include_already_check.checkState() == Qt.CheckState.Checked
+    assert window.rows["already"].sub.text() == "Importing again"
     assert window.import_button.text() == "Import 2 photos"
-    assert "1 already imported (1 to import again)" in window.status_label.text()
+    assert "1 already imported (1 to import again)" in window.plan.summary()
 
     window.allow_reimport_check.click()
     assert window.import_button.text() == "Import 1 photo"

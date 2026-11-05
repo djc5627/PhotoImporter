@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from collections import Counter
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
@@ -9,11 +10,11 @@ from PySide6.QtCore import QByteArray, QEvent, QSize, Qt, QThreadPool, QTimer, Q
 from PySide6.QtGui import QCloseEvent, QDesktopServices, QPainter, QPaintEvent
 from PySide6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QFileDialog,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -22,12 +23,9 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
-    QRadioButton,
-    QSizePolicy,
     QToolButton,
     QVBoxLayout,
     QWidget,
-    QWidgetAction,
 )
 
 from .. import __version__
@@ -50,6 +48,7 @@ from ..core.exif import ExifToolReader, MetadataReader
 from ..core.indexer import ScanResult, scan_library
 from ..core.models import Camera
 from ..core.planner import (
+    STATUSES,
     CameraGroup,
     ImportBreakdown,
     ImportPlan,
@@ -63,12 +62,32 @@ from ..core.updates import Release, newer_release
 from .camera_dialog import CameraDialog
 from .card_watcher import CardWatcher
 from .import_dialog import ImportConfirmDialog
+from .import_panel import CategoryRow
 from .settings_dialog import SettingsDialog
 from .theme import accent, apply_appearance, colors, icon, muted, set_icon
 from .thumbnail_grid import ThumbnailGrid
 from .workers import BackgroundCall, ReportProgress, Worker
 
 GEOMETRY_SETTING = "window_geometry"
+# The panel's rows: icon and label, and the grid view each one shows.
+ROWS = {
+    "all": ("images", "All on card"),
+    "selected": ("circle-check", "To import"),
+    "new": ("sparkles", "New"),
+    "recent_deleted": ("history", "Recently deleted"),
+    "deleted": ("trash-2", "Deleted since import"),
+    "older": ("archive-x", "Probably deleted"),
+    "already": ("copy-check", "Already imported"),
+}
+ROW_VIEWS = {
+    "all": "All on card",
+    "selected": "Selected for import",
+    "new": "New",
+    "recent_deleted": "Recently deleted",
+    "deleted": "Deleted",
+    "older": "Probably deleted",
+    "already": "Already imported",
+}
 THUMBNAIL_SIZE_SETTING = "thumbnail_size"  # index into thumbnail_grid.SIZES
 FIRST_SIZE = QSize(1280, 900)  # fits a 1080p screen with the taskbar and title bar
 
@@ -144,14 +163,15 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(18, 14, 18, 16)
         layout.setSpacing(12)
         layout.addWidget(self._build_update_bar())
-        layout.addLayout(self._build_header())
-        setup = QFrame()
-        setup.setObjectName("panel")
-        setup.setLayout(self._build_setup())
-        setup.layout().setContentsMargins(16, 12, 16, 12)
-        layout.addWidget(setup)
-        layout.addWidget(self._build_plan_box(), stretch=1)
-        layout.addLayout(self._build_footer())
+        body = QHBoxLayout()
+        body.setSpacing(16)
+        left = QVBoxLayout()
+        left.setSpacing(12)
+        left.addLayout(self._build_header())
+        left.addWidget(self._build_plan_box(), stretch=1)
+        body.addLayout(left, stretch=1)
+        body.addWidget(self._build_side_panel())
+        layout.addLayout(body, stretch=1)
         self.setCentralWidget(central)
         self._restore_geometry()
         app = QApplication.instance()
@@ -163,7 +183,7 @@ class MainWindow(QMainWindow):
 
         self._refresh_library_label()
         self._refresh_target_preview()
-        self.status_label.setText("Insert an SD card, or browse to a card or folder.")
+        self.status_label.setText("")  # the header and panel say what to do
         self.card_watcher = CardWatcher(card_detector, card_poll_ms, self)
         self.card_watcher.inserted.connect(self.on_card_inserted)
         self.card_watcher.removed.connect(self.on_card_removed)
@@ -179,6 +199,9 @@ class MainWindow(QMainWindow):
     def _apply_styles(self) -> None:
         """Styles with colours of their own, for the current light/dark palette."""
         c = colors()
+        for row in self.rows.values():
+            row.restyle()
+        self.library_icon.setPixmap(icon("folder", 13).pixmap(13, 13))
         color = accent()
         light, dark = color.lighter(118).name(), color.darker(118).name()
         self.import_button.setStyleSheet(
@@ -327,30 +350,75 @@ class MainWindow(QMainWindow):
         self.title_label.setText(card_title(self.plan, self._source))
         self.subtitle_label.setText(card_subtitle(self.plan))
 
-    def _build_setup(self) -> QGridLayout:
-        """Library, import folder and card, one compact row each."""
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(6)
+    def _build_side_panel(self) -> QFrame:
+        """ "This import": what's on the card by kind, where it goes, and the Import button."""
+        panel = QFrame()
+        panel.setObjectName("panel")
+        panel.setFixedWidth(312)
+        box = QVBoxLayout(panel)
+        box.setContentsMargins(14, 16, 14, 14)
+        box.setSpacing(3)
+        title = QLabel("This import")
+        title.setObjectName("panelTitle")
+        box.addWidget(title)
+        self.empty_label = muted(QLabel("Choose a card to see what's on it."))
+        self.empty_label.setWordWrap(True)
+        self.empty_label.setContentsMargins(4, 4, 4, 4)
+        box.addWidget(self.empty_label)
+        switches = {
+            "recent_deleted": self.include_recent_deleted_check,
+            "deleted": self.include_deleted_check,
+            "older": self.include_older_check,
+            "already": self.allow_reimport_check,
+        }
+        self.rows: dict[str, CategoryRow] = {}
+        for key, (icon_name, label) in ROWS.items():
+            row = CategoryRow(icon_name, label, switches.get(key))
+            row.clicked.connect(lambda key=key: self.show_kind(key))
+            box.addWidget(row)
+            self.rows[key] = row
+        box.addStretch(1)
 
-        # Cut off in the middle, keeping the drive and the photo count, if it doesn't fit.
-        self.library_label = ElidedLabel(elide=Qt.TextElideMode.ElideMiddle)
-        self.change_root_button = QPushButton("Change…")
-        self.change_root_button.clicked.connect(self.choose_photos_root)
-
-        self.new_radio = QRadioButton("New folder")
-        self.existing_radio = QRadioButton("Existing folder")
+        section = QLabel("IMPORT INTO")
+        section.setObjectName("section")
+        box.addWidget(section)
+        # A two-way switch: checkable buttons, one of which is always on.
+        self.new_radio = QPushButton("New folder")
+        self.existing_radio = QPushButton("Existing folder")
+        self._target_group = QButtonGroup(self)
+        for button in (self.new_radio, self.existing_radio):
+            button.setCheckable(True)
+            self._target_group.addButton(button)
         self.new_radio.setChecked(True)
+        segment = QFrame()
+        segment.setObjectName("segment")
+        seg = QHBoxLayout(segment)
+        seg.setContentsMargins(3, 3, 3, 3)
+        seg.setSpacing(2)
+        for radio in (self.new_radio, self.existing_radio):
+            radio.setObjectName("segment")
+            radio.setCursor(Qt.CursorShape.PointingHandCursor)
+            seg.addWidget(radio, stretch=1)
+        box.addWidget(segment)
+        box.addSpacing(6)
         self.description_edit = QLineEdit()
         self.description_edit.setPlaceholderText("Description, e.g. Halloween Hike")
-        self.target_preview = QLabel()
-        muted(self.target_preview)
-        # Ignored width: a long path is cut off instead of squeezing the description box.
-        self.target_preview.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        box.addWidget(self.description_edit)
+        self.existing_row = QWidget()
+        existing = QHBoxLayout(self.existing_row)
+        existing.setContentsMargins(0, 0, 0, 0)
+        existing.setSpacing(6)
         self.existing_edit = QLineEdit()
-        self.existing_edit.setPlaceholderText("Choose a folder in your library")
+        self.existing_edit.setPlaceholderText("A folder in your library")
         self.browse_target_button = QPushButton("Browse…")
         self.browse_target_button.clicked.connect(self.choose_existing_target)
+        existing.addWidget(self.existing_edit, stretch=1)
+        existing.addWidget(self.browse_target_button)
+        box.addWidget(self.existing_row)
+        self.target_preview = muted(ElidedLabel(elide=Qt.TextElideMode.ElideMiddle))
+        self.target_preview.setObjectName("small")
+        self.target_preview.setContentsMargins(4, 2, 4, 0)
+        box.addWidget(self.target_preview)
         for signal in (
             self.new_radio.toggled,
             self.description_edit.textChanged,
@@ -358,34 +426,70 @@ class MainWindow(QMainWindow):
         ):
             signal.connect(self._refresh_target_preview)
 
-        def caption(text: str) -> QLabel:
-            label = QLabel(text)
-            label.setStyleSheet("font-weight: 600")
-            return label
+        box.addSpacing(10)
+        self.status_label = muted(QLabel("Ready."))
+        self.status_label.setObjectName("small")
+        self.status_label.setWordWrap(True)
+        self.status_label.setContentsMargins(4, 0, 4, 4)
+        box.addWidget(self.status_label)
+        progress = QHBoxLayout()
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.setVisible(False)
+        self.cancel_button.clicked.connect(self._cancel.set)
+        progress.addWidget(self.progress_bar, stretch=1)
+        progress.addWidget(self.cancel_button)
+        box.addLayout(progress)
+        self.import_button = QPushButton("Import")
+        self.import_button.setObjectName("importButton")
+        self.import_button.setEnabled(False)
+        self.import_button.clicked.connect(self.start_import)
+        box.addWidget(self.import_button)
+        self.import_dest_label = muted(ElidedLabel())
+        self.import_dest_label.setObjectName("small")
+        self.import_dest_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        box.addWidget(self.import_dest_label)
+        box.addSpacing(8)
+        library = QHBoxLayout()
+        library.setSpacing(6)
+        self.library_icon = QLabel()
+        library.addWidget(self.library_icon)
+        # Cut off in the middle, keeping the drive and the photo count, if it doesn't fit.
+        self.library_label = muted(ElidedLabel(elide=Qt.TextElideMode.ElideMiddle))
+        self.library_label.setObjectName("small")
+        library.addWidget(self.library_label, stretch=1)
+        box.addLayout(library)
+        self.grid.view_combo.currentIndexChanged.connect(self._refresh_include_checks)
+        self._refresh_include_checks()
+        return panel
 
-        def buttons(*widgets: QWidget) -> QHBoxLayout:
-            row = QHBoxLayout()
-            row.setSpacing(6)
-            row.addStretch(1)
-            for widget in widgets:
-                row.addWidget(widget)
-            return row
+    def show_kind(self, key: str) -> None:
+        """Show only one kind of photo in the grid (a row of the panel was clicked)."""
+        label = ROW_VIEWS[key]
+        combo = self.grid.view_combo
+        for i in range(combo.count()):
+            if combo.itemText(i).startswith(label):
+                combo.setCurrentIndex(i)
+                return
 
-        grid.addWidget(caption("Library"), 0, 0)
-        grid.addWidget(self.library_label, 0, 1, 1, 2)
-        grid.addLayout(buttons(self.change_root_button), 0, 3)
-        grid.addWidget(caption("Import into"), 1, 0)
-        grid.addWidget(self.new_radio, 1, 1)
-        new_row = QHBoxLayout()
-        new_row.setSpacing(10)
-        new_row.addWidget(self.description_edit, stretch=1)
-        new_row.addWidget(self.target_preview, stretch=1)
-        grid.addLayout(new_row, 1, 2, 1, 2)
-        grid.addWidget(self.existing_radio, 2, 1)
-        grid.addWidget(self.existing_edit, 2, 2)
-        grid.addLayout(buttons(self.browse_target_button), 2, 3)
-        grid.setColumnStretch(2, 1)
-        return grid
+    def _import_kinds(self, files: int, pictures: int) -> str:
+        """E.g. "6 new · 1 deleted (9 files)": what the Import button will copy."""
+        if not pictures or self.plan is None:
+            return "Nothing selected"
+        statuses = self.plan.statuses()
+        kinds = Counter(
+            next(s for s in STATUSES if s in {statuses[p.path] for p in shot.photos})
+            for shot in group_shots([p for g in self.plan.groups for p in self.plan.to_copy(g)])
+        )
+        names = {"recent_deleted": "recently deleted", "older": "probably deleted"}
+        text = " · ".join(f"{kinds[s]} {names.get(s, s)}" for s in STATUSES if kinds[s])
+        text = text.replace("already", "again")
+        return text + (f" ({files} files)" if files != pictures else "")
+
+    def row_offered(self, key: str) -> bool:
+        """Whether the panel shows a row for that kind of photo."""
+        return not self.rows[key].isHidden()
 
     def _build_plan_box(self) -> QWidget:
         box = QWidget()
@@ -425,68 +529,26 @@ class MainWindow(QMainWindow):
             "already there from the same camera, so they were most likely imported and\n"
             "deleted before the app kept a history."
         )
-        self.allow_reimport_check = QCheckBox("Allow re-importing photos already in the library")
+        self.allow_reimport_check = QCheckBox()
         self.allow_reimport_check.setToolTip(
-            "Lets you select photos that are already in your library, to copy them again\n"
-            "into this import folder. Off each time you look at a card."
+            "Import photos that are already in your library again, into this import folder.\n"
+            "Off each time you look at a card."
         )
-        self.allow_reimport_check.toggled.connect(self._on_allow_reimport)
-        self.include_already_check = QCheckBox()
-        self.include_already_check.setToolTip("Copies these photos again into this import folder.")
+        self.allow_reimport_check.clicked.connect(self._on_allow_reimport)
 
-        # The Include menu: one tick per kind of photo that is skipped unless you ask for it.
-        self.include_menu = QMenu(self)
-        self._include_actions: dict[QCheckBox, QWidgetAction] = {}
         for status, check in self._include_checks().items():
             check.clicked.connect(lambda on, status=status: self._on_include_clicked(status, on))
-            if status == "already":
-                self.include_menu.addSeparator()
-                self._add_menu_check(self.allow_reimport_check)
-            self._add_menu_check(check, indent=20 if status == "already" else 0)
-        self.include_button = QToolButton()
-        self.include_button.setText("Include")
-        self.include_button.setMenu(self.include_menu)
-        self.include_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self.include_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        set_icon(self.include_button, "filter")
-        self.grid.toolbar.insertWidget(3, self.include_button)
-        self._refresh_include_checks()
+        # The panel's rows replace these.
+        for widget in (self.grid.show_label, self.grid.view_combo, self.grid.count_label):
+            widget.hide()
         return box
-
-    def _build_footer(self) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.setSpacing(8)
-        self.status_label = ElidedLabel("Ready.")
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setVisible(False)
-        self.cancel_button = QPushButton("Cancel")
-        self.cancel_button.setVisible(False)
-        self.cancel_button.clicked.connect(self._cancel.set)
-        self.import_button = QPushButton("Import")
-        self.import_button.setObjectName("importButton")
-        self.import_button.setEnabled(False)
-        self.import_button.clicked.connect(self.start_import)
-        row.addWidget(self.status_label, stretch=1)
-        row.addWidget(self.progress_bar, stretch=1)
-        row.addWidget(self.cancel_button)
-        row.addWidget(self.import_button)
-        return row
 
     # Library
 
     def _refresh_library_label(self) -> None:
         self.library_label.setText(
-            f"{photos_root(self.db)}   ({self.db.file_count():,} photos indexed)"
+            f"Library {photos_root(self.db)} · {self.db.file_count():,} photos"
         )
-
-    def choose_photos_root(self) -> None:
-        folder = QFileDialog.getExistingDirectory(
-            self, "Photo library folder", str(photos_root(self.db))
-        )
-        if folder:
-            self.db.set_setting("photos_root", str(Path(folder)))
-            self._refresh_library_label()
-            self._refresh_target_preview()
 
     # Updates
 
@@ -586,6 +648,8 @@ class MainWindow(QMainWindow):
         self.description_edit.setEnabled(is_new)
         self.existing_edit.setEnabled(not is_new)
         self.browse_target_button.setEnabled(not is_new)
+        self.description_edit.setVisible(is_new)
+        self.existing_row.setVisible(not is_new)
         target = self.target_dir() if is_new else None
         self.target_preview.setText(str(target) if target else "")
         self.target_preview.setToolTip(f"This import will create {target}" if target else "")
@@ -673,6 +737,7 @@ class MainWindow(QMainWindow):
 
     def _on_plan_ready(self, result: tuple[ImportPlan, list[str]]) -> None:
         plan, self.camera_folders = result
+        self.status_label.setText("")  # the panel's rows show what was found
         self._set_plan(plan)
         self._refresh_library_label()
         self.plan_ready.emit(plan)
@@ -693,8 +758,11 @@ class MainWindow(QMainWindow):
         self._refresh_selection_view()
 
     def _on_allow_reimport(self, allow: bool) -> None:
+        """The Already imported switch: import those photos again, or not."""
         if self.plan is not None:
             self.plan.allow_reimport = allow
+            if allow:  # turning it off keeps them selected, e.g. for deleting
+                self.plan.select(self.plan.photos("already"))
             self.grid.refresh_checks()
         self._refresh_selection_view()
 
@@ -749,11 +817,19 @@ class MainWindow(QMainWindow):
         if plan is None:
             self.import_button.setEnabled(False)
             self.import_button.setText("Import")
+            self.import_dest_label.setText("")
             return
         pictures, files = self._import_counts()
+        folders = sorted(
+            {
+                str(Path(g.camera.folder_name, g.camera.subdir_for(p.kind)))
+                for g in plan.groups
+                for p in plan.to_copy(g)
+            }
+        )
+        self.import_dest_label.setText(f"to {' and '.join(folders)}" if folders else "")
         self.import_button.setEnabled(files > 0)
         self.import_button.setText(f"Import {self._amount(pictures, files)}" if files else "Import")
-        self.status_label.setText(plan.summary())
 
     def _import_counts(self) -> tuple[int, int]:
         """(pictures, files) ticked for import; a RAW+JPG pair is one picture, two files."""
@@ -767,29 +843,11 @@ class MainWindow(QMainWindow):
         text = _photos(pictures)
         return text if files == pictures else f"{text} ({files} files)"
 
-    def _add_menu_check(self, check: QCheckBox, indent: int = 0) -> None:
-        holder = QWidget()
-        row = QHBoxLayout(holder)
-        row.setContentsMargins(10 + indent, 4, 12, 4)
-        row.addWidget(check)
-        action = QWidgetAction(self.include_menu)
-        action.setDefaultWidget(holder)
-        self.include_menu.addAction(action)
-        self._include_actions[check] = action
-
-    def _show_in_menu(self, check: QCheckBox, show: bool) -> None:
-        self._include_actions[check].setVisible(show)
-
-    def in_include_menu(self, check: QCheckBox) -> bool:
-        """Whether `check` is offered in the Include menu (for tests)."""
-        return self._include_actions[check].isVisible()
-
     def _include_checks(self) -> dict[str, QCheckBox]:
         return {
             "recent_deleted": self.include_recent_deleted_check,
             "deleted": self.include_deleted_check,
             "older": self.include_older_check,
-            "already": self.include_already_check,
         }
 
     def _refresh_grid(self) -> None:
@@ -799,16 +857,9 @@ class MainWindow(QMainWindow):
         self.grid.set_plan(self.plan, self.shown_groups())
 
     def _refresh_include_checks(self) -> None:
+        """Update the panel's rows: counts, what's included, and which one is shown."""
         plan = self.plan
-        recent = plan.recent_deleted_count if plan else 0
-        deleted = plan.deleted_count if plan else 0
-        older = plan.older_count if plan else 0
-        already = plan.already_count if plan else 0
-        self.include_already_check.setText(f"Already imported ({already})")
-        self._show_in_menu(self.allow_reimport_check, already > 0)
-        self._show_in_menu(
-            self.include_already_check, already > 0 and self.allow_reimport_check.isChecked()
-        )
+        self.empty_label.setVisible(plan is None)
         for status, check in self._include_checks().items():
             total = len(plan.photos(status)) if plan else 0
             ticked = plan.selected_count(status) if plan else 0
@@ -821,26 +872,40 @@ class MainWindow(QMainWindow):
             check.blockSignals(True)
             check.setCheckState(state)
             check.blockSignals(False)
-        self.include_recent_deleted_check.setText(f"Recently deleted ({recent})")
-        self.include_deleted_check.setText(f"Deleted since import ({deleted})")
-        self.include_older_check.setText(f"Probably deleted earlier ({older})")
-        self._show_in_menu(self.include_recent_deleted_check, recent > 0)
-        self._show_in_menu(self.include_deleted_check, deleted > 0)
-        self._show_in_menu(self.include_older_check, older > 0)
-        # How many kinds of skipped photo are (partly) included, shown on the button.
-        kinds = ["recent_deleted", "deleted", "older"]
-        if self.allow_reimport_check.isChecked():
-            kinds.append("already")
-        included = sum(1 for k in kinds if plan and plan.selected_count(k))
-        anything = bool(recent or deleted or older or already)
-        self.include_button.setEnabled(anything and not self._busy)
-        self.include_button.setText(f"Include ({included})" if included else "Include")
-        self.include_button.setToolTip(
-            "Photos skipped unless you include them: deleted from your library, or already\n"
-            "imported. Their tiles show a coloured label."
-            if anything
-            else "Nothing to include: every photo on this card is new."
-        )
+        if plan is None:
+            for row in self.rows.values():
+                row.hide()
+            return
+
+        def counts(photos: list) -> tuple[int, int]:
+            shots = group_shots(photos)
+            return len(shots), sum(any(plan.is_selected(p) for p in s.photos) for s in shots)
+
+        total, chosen = counts(plan.photos())
+        pictures, files = self._import_counts()
+        values = {
+            "all": (total, f"{chosen} selected"),
+            "selected": (pictures, self._import_kinds(files, pictures)),
+        }
+        for status in ("new", "recent_deleted", "deleted", "older", "already"):
+            n, sel = counts(plan.photos(status))
+            if status == "new":
+                sub = f"{sel} selected"
+            elif status == "already":
+                sub = "Importing again" if plan.allow_reimport else "In your library"
+            elif sel == 0:
+                sub = "Skipped"
+            elif sel == n:
+                sub = "Included"
+            else:
+                sub = f"{sel} of {n} included"
+            values[status] = (n, sub)
+        current = self.grid._view_label()
+        for key, row in self.rows.items():
+            number, sub = values[key]
+            row.set_values(number, sub)
+            row.setVisible(key in ("all", "selected", "new") or number > 0)
+            row.set_active(ROW_VIEWS[key] == current)
 
     # Deleting from the card
 
@@ -987,12 +1052,12 @@ class MainWindow(QMainWindow):
         self._busy = busy
         self.progress_bar.setVisible(busy)
         for widget in (
-            self.change_root_button,
             self.rescan_button,
             self.settings_button,
             self.find_button,
             self.card_button,
-            self.include_button,
+            *self._include_checks().values(),
+            self.allow_reimport_check,
             self.grid.select_all_button,
             self.grid.select_none_button,
             self.grid.list,
