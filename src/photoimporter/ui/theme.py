@@ -11,11 +11,22 @@ set to match the current palette. Widgets that use them restyle on a PaletteChan
 from __future__ import annotations
 
 import tempfile
+import weakref
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QGuiApplication, QPalette
+from PySide6.QtCore import QByteArray, QSize, Qt
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontDatabase,
+    QGuiApplication,
+    QIcon,
+    QPainter,
+    QPalette,
+    QPixmap,
+)
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QApplication, QWidget
 
 from ..core.config import ACCENTS, DEFAULT_ACCENT
@@ -269,6 +280,11 @@ QMainWindow, QDialog {{ background: {s.bg}; }}
                               stop:0 {s.bg_glow}, stop:0.6 {s.bg}, stop:1 {s.bg});
 }}
 QFrame#panel {{ background: {s.panel}; border: 1px solid {s.line}; border-radius: 16px; }}
+QLabel#title {{ font-size: 19pt; font-weight: 700; }}
+QToolButton#roundButton {{ border-radius: 18px; padding: 0; min-width: 36px; max-width: 36px;
+  min-height: 36px; max-height: 36px; }}
+QToolButton#cardButton {{ border-radius: 18px; padding: 8px 30px 8px 14px; font-weight: 500; }}
+QPushButton {{ min-height: 20px; }}
 QLabel {{ background: transparent; }}
 QPushButton, QToolButton {{
   background: {s.field}; color: {s.text}; border: 1px solid {s.line}; border-radius: 9px;
@@ -278,8 +294,9 @@ QPushButton:hover, QToolButton:hover {{ background: {s.field_hover}; }}
 QPushButton:pressed, QToolButton:pressed {{ background: {s.line}; }}
 QPushButton:disabled, QToolButton:disabled {{ color: {s.disabled}; }}
 QPushButton:default {{ border: 1px solid {a}; }}
-QToolButton::menu-indicator {{ subcontrol-position: right center; right: 6px; }}
-QToolButton[popupMode="2"] {{ padding-right: 22px; }}
+QToolButton::menu-indicator {{ image: url({icon_file("chevron-down", s.muted)}); width: 12px;
+  height: 12px; subcontrol-origin: padding; subcontrol-position: right center; right: 10px; }}
+QToolButton[popupMode="2"] {{ padding-right: 30px; }}
 QLineEdit, QComboBox {{
   background: {s.field}; color: {s.text}; border: 1px solid {s.line}; border-radius: 9px;
   padding: 6px 10px; selection-background-color: {a}; selection-color: white;
@@ -341,6 +358,47 @@ QTableCornerButton::section {{ background: {s.field}; border: none; }}
 """
 
 
+_ICONS = Path(__file__).parent / "icons"  # Lucide line icons (ISC licence)
+_themed: list[tuple[weakref.ref, str, int]] = []  # widgets to re-colour on a theme change
+
+
+def icon(name: str, size: int = 16, color: QColor | str | None = None) -> QIcon:
+    """A bundled line icon drawn in `color` (default: the palette's text colour)."""
+    color = QColor(color) if color else QGuiApplication.palette().color(QPalette.ColorRole.Text)
+    svg = (_ICONS / f"{name}.svg").read_text().replace("currentColor", color.name())
+    renderer = QSvgRenderer(QByteArray(svg.encode()))
+    result = QIcon()
+    for scale in (1, 2):
+        pixmap = QPixmap(size * scale, size * scale)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        renderer.render(painter)
+        painter.end()
+        pixmap.setDevicePixelRatio(scale)
+        result.addPixmap(pixmap)
+    return result
+
+
+def set_icon(widget: QWidget, name: str, size: int = 16) -> None:
+    """Give a button an icon that follows light and dark mode."""
+    widget.setIcon(icon(name, size))
+    widget.setIconSize(QSize(size, size))
+    _themed.append((weakref.ref(widget), name, size))
+
+
+def _recolour_icons() -> None:
+    alive = []
+    for ref, name, size in _themed:
+        widget = ref()
+        try:
+            if widget is not None:
+                widget.setIcon(icon(name, size))
+                alive.append((ref, name, size))
+        except RuntimeError:  # the Qt object is gone
+            pass
+    _themed[:] = alive
+
+
 FONT_FAMILY = "Inter"
 _fonts_loaded = False
 
@@ -385,3 +443,4 @@ def apply_appearance(app: QApplication, mode: str, accent_choice: str = DEFAULT_
     palette.setColor(QPalette.ColorRole.HighlightedText, QColor("white"))
     app.setPalette(palette)
     app.setStyleSheet(stylesheet(dark, _accent))
+    _recolour_icons()

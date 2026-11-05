@@ -9,6 +9,7 @@ a = Analysis(  # noqa: F821
     datas=[
         (str(ROOT / "src" / "photoimporter" / "ui" / "icon.png"), "photoimporter/ui"),
         (str(ROOT / "src" / "photoimporter" / "ui" / "fonts"), "photoimporter/ui/fonts"),
+        (str(ROOT / "src" / "photoimporter" / "ui" / "icons"), "photoimporter/ui/icons"),
     ],
     excludes=["tkinter"],
 )

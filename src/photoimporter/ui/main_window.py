@@ -49,14 +49,22 @@ from ..core.deleter import DeleteResult, Recycler, default_recycler, delete_from
 from ..core.exif import ExifToolReader, MetadataReader
 from ..core.indexer import ScanResult, scan_library
 from ..core.models import Camera
-from ..core.planner import CameraGroup, ImportBreakdown, ImportPlan, build_plan, import_breakdown
+from ..core.planner import (
+    CameraGroup,
+    ImportBreakdown,
+    ImportPlan,
+    build_plan,
+    card_subtitle,
+    card_title,
+    import_breakdown,
+)
 from ..core.thumbnails import ExifToolThumbnails, ThumbnailSource, group_shots
 from ..core.updates import Release, newer_release
 from .camera_dialog import CameraDialog
 from .card_watcher import CardWatcher
 from .import_dialog import ImportConfirmDialog
 from .settings_dialog import SettingsDialog
-from .theme import accent, apply_appearance, colors, muted
+from .theme import accent, apply_appearance, colors, icon, muted, set_icon
 from .thumbnail_grid import ThumbnailGrid
 from .workers import BackgroundCall, ReportProgress, Worker
 
@@ -126,6 +134,7 @@ class MainWindow(QMainWindow):
         self._cancel = threading.Event()
         self._busy = False
         self._pending_card: Path | None = None
+        self._source: Path | None = None
         self._closed = False
 
         self.setWindowTitle("Photo Importer")
@@ -135,6 +144,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(18, 14, 18, 16)
         layout.setSpacing(12)
         layout.addWidget(self._build_update_bar())
+        layout.addLayout(self._build_header())
         setup = QFrame()
         setup.setObjectName("panel")
         setup.setLayout(self._build_setup())
@@ -228,6 +238,95 @@ class MainWindow(QMainWindow):
         self.available_update: Release | None = None
         return self.update_bar
 
+    def _build_header(self) -> QHBoxLayout:
+        """The card's title and summary, the card chooser and the round buttons."""
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        text = QVBoxLayout()
+        text.setSpacing(2)
+        self.title_label = QLabel("Photo Importer")
+        self.title_label.setObjectName("title")
+        self.subtitle_label = muted(ElidedLabel())
+        text.addWidget(self.title_label)
+        text.addWidget(self.subtitle_label)
+        row.addLayout(text, stretch=1)
+
+        self.card_button = QToolButton()
+        self.card_button.setObjectName("cardButton")
+        self.card_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.card_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        set_icon(self.card_button, "hard-drive")
+        self.card_menu = QMenu(self)
+        self.card_menu.aboutToShow.connect(self._fill_card_menu)
+        self.card_button.setMenu(self.card_menu)
+        self.find_button = QPushButton("Find new photos")
+        self.find_button.setDefault(True)
+        set_icon(self.find_button, "search")
+        self.find_button.clicked.connect(self.find_new_photos)
+        self.rescan_button = self._round_button("refresh-cw", "Rescan library")
+        self.rescan_button.clicked.connect(self.rescan_library)
+        self.settings_button = self._round_button("settings", "Settings")
+        self.settings_button.clicked.connect(self.open_settings)
+        for widget in (
+            self.card_button,
+            self.find_button,
+            self.rescan_button,
+            self.settings_button,
+        ):
+            row.addWidget(widget, alignment=Qt.AlignmentFlag.AlignTop)
+        self._refresh_card_button()
+        return row
+
+    @staticmethod
+    def _round_button(icon_name: str, tip: str) -> QToolButton:
+        button = QToolButton()
+        button.setObjectName("roundButton")
+        button.setToolTip(tip)
+        set_icon(button, icon_name)
+        return button
+
+    def source(self) -> Path | None:
+        """The SD card or folder to import from."""
+        return self._source
+
+    def set_source(self, path: Path | str | None) -> None:
+        self._source = Path(path) if path else None
+        self._refresh_card_button()
+        self._refresh_header()
+
+    def _refresh_card_button(self) -> None:
+        source = self._source
+        if source is None:
+            self.card_button.setText("Choose a card")
+            self.card_button.setToolTip("Choose an SD card or a folder to import from")
+        else:
+            drive = source == Path(source.anchor) and bool(source.anchor)
+            name = f"{source}  SD card" if drive else source.name or str(source)
+            self.card_button.setText(name)
+            self.card_button.setToolTip(f"Importing from {source}")
+
+    def _fill_card_menu(self) -> None:
+        self.card_menu.clear()
+        try:
+            cards = list(self.card_detector())
+        except OSError:
+            cards = []
+        for card in cards:
+            action = self.card_menu.addAction(icon("hard-drive"), f"{card}  SD card")
+            action.triggered.connect(lambda _=False, card=card: self._use_card(card))
+        if not cards:
+            self.card_menu.addAction("No SD card found").setEnabled(False)
+        self.card_menu.addSeparator()
+        self.card_menu.addAction(icon("folder-open"), "Choose a folder…", self.choose_source)
+
+    def _use_card(self, card: Path) -> None:
+        self.set_source(card)
+        self.find_new_photos()
+
+    def _refresh_header(self) -> None:
+        self.title_label.setText(card_title(self.plan, self._source))
+        self.subtitle_label.setText(card_subtitle(self.plan))
+
     def _build_setup(self) -> QGridLayout:
         """Library, import folder and card, one compact row each."""
         grid = QGridLayout()
@@ -238,10 +337,6 @@ class MainWindow(QMainWindow):
         self.library_label = ElidedLabel(elide=Qt.TextElideMode.ElideMiddle)
         self.change_root_button = QPushButton("Change…")
         self.change_root_button.clicked.connect(self.choose_photos_root)
-        self.rescan_button = QPushButton("Rescan library")
-        self.rescan_button.clicked.connect(self.rescan_library)
-        self.settings_button = QPushButton("Settings…")
-        self.settings_button.clicked.connect(self.open_settings)
 
         self.new_radio = QRadioButton("New folder")
         self.existing_radio = QRadioButton("Existing folder")
@@ -263,16 +358,6 @@ class MainWindow(QMainWindow):
         ):
             signal.connect(self._refresh_target_preview)
 
-        self.source_edit = QLineEdit()
-        self.source_edit.setPlaceholderText("SD card or folder")
-        self.browse_source_button = QPushButton("Browse…")
-        self.browse_source_button.clicked.connect(self.choose_source)
-        self.detect_button = QPushButton("Detect card")
-        self.detect_button.clicked.connect(self.detect_card)
-        self.find_button = QPushButton("Find new photos")
-        self.find_button.setDefault(True)
-        self.find_button.clicked.connect(self.find_new_photos)
-
         def caption(text: str) -> QLabel:
             label = QLabel(text)
             label.setStyleSheet("font-weight: 600")
@@ -288,9 +373,7 @@ class MainWindow(QMainWindow):
 
         grid.addWidget(caption("Library"), 0, 0)
         grid.addWidget(self.library_label, 0, 1, 1, 2)
-        grid.addLayout(
-            buttons(self.change_root_button, self.rescan_button, self.settings_button), 0, 3
-        )
+        grid.addLayout(buttons(self.change_root_button), 0, 3)
         grid.addWidget(caption("Import into"), 1, 0)
         grid.addWidget(self.new_radio, 1, 1)
         new_row = QHBoxLayout()
@@ -301,11 +384,6 @@ class MainWindow(QMainWindow):
         grid.addWidget(self.existing_radio, 2, 1)
         grid.addWidget(self.existing_edit, 2, 2)
         grid.addLayout(buttons(self.browse_target_button), 2, 3)
-        grid.addWidget(caption("Import from"), 3, 0)
-        grid.addWidget(self.source_edit, 3, 1, 1, 2)
-        grid.addLayout(
-            buttons(self.browse_source_button, self.detect_button, self.find_button), 3, 3
-        )
         grid.setColumnStretch(2, 1)
         return grid
 
@@ -369,7 +447,8 @@ class MainWindow(QMainWindow):
         self.include_button.setText("Include")
         self.include_button.setMenu(self.include_menu)
         self.include_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self.include_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.include_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        set_icon(self.include_button, "filter")
         self.grid.toolbar.insertWidget(3, self.include_button)
         self._refresh_include_checks()
         return box
@@ -517,16 +596,16 @@ class MainWindow(QMainWindow):
             self.existing_edit.setText(str(Path(folder)))
 
     def choose_source(self) -> None:
-        folder = QFileDialog.getExistingDirectory(
-            self, "SD card or folder", self.source_edit.text()
-        )
+        start = str(self._source) if self._source else ""
+        folder = QFileDialog.getExistingDirectory(self, "SD card or folder", start)
         if folder:
-            self.source_edit.setText(str(Path(folder)))
+            self.set_source(Path(folder))
+            self.find_new_photos()
 
     def detect_card(self) -> None:
         cards = self.card_detector()
         if cards:
-            self.source_edit.setText(str(cards[0]))
+            self.set_source(cards[0])
             self.status_label.setText(f"Card detected: {', '.join(map(str, cards))}")
         else:
             self.status_label.setText("No card detected. Browse to a card or folder.")
@@ -535,20 +614,20 @@ class MainWindow(QMainWindow):
         """A card was inserted (or was already in when the app started): look at it."""
         if not find_on_insert(self.db):
             if not self._busy:
-                self.source_edit.setText(str(card))
+                self.set_source(card)
                 self.status_label.setText(f"Card inserted: {card}. Click Find new photos.")
             return
         if self._busy:
             self._pending_card = card
             self.status_label.setText(f"Card inserted: {card}. Checking it when this finishes…")
             return
-        self.source_edit.setText(str(card))
+        self.set_source(card)
         self.find_new_photos()
 
     def on_card_removed(self, card: Path) -> None:
         if self._pending_card == card:
             self._pending_card = None
-        if self._busy or Path(self.source_edit.text().strip() or ".") != card:
+        if self._busy or self._source != card:
             return
         self._set_plan(None)
         self.status_label.setText(f"Card removed: {card}.")
@@ -556,8 +635,8 @@ class MainWindow(QMainWindow):
     # Planning
 
     def find_new_photos(self) -> None:
-        source = Path(self.source_edit.text().strip())
-        if not self.source_edit.text().strip() or not source.is_dir():
+        source = self._source
+        if source is None or not source.is_dir():
             self._show_error("Choose an SD card or folder to import from.")
             return
         root = photos_root(self.db)
@@ -621,6 +700,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_plan_view(self) -> None:
         plan = self.plan
+        self._refresh_header()
         self._refresh_include_checks()
         self._refresh_camera_combo()
         if plan is None:
@@ -911,8 +991,7 @@ class MainWindow(QMainWindow):
             self.rescan_button,
             self.settings_button,
             self.find_button,
-            self.detect_button,
-            self.browse_source_button,
+            self.card_button,
             self.include_button,
             self.grid.select_all_button,
             self.grid.select_none_button,

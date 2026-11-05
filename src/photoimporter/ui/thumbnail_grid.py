@@ -56,7 +56,7 @@ from PySide6.QtWidgets import (
 from ..core.models import PhotoFile
 from ..core.planner import STATUS_LABELS, STATUSES, CameraGroup, ImportPlan
 from ..core.thumbnails import Shot, Thumbnail, ThumbnailSource, group_shots
-from .theme import accent, colors, current_surfaces, muted
+from .theme import accent, colors, current_surfaces, icon, muted, set_icon
 
 # Tile sizes for the size slider. Large uses the cameras' bigger embedded preview.
 SIZES = [("Small", QSize(120, 90)), ("Medium", QSize(160, 120)), ("Large", QSize(320, 240))]
@@ -418,6 +418,12 @@ class ThumbnailGrid(QWidget):
         self.delete_button = QPushButton("Delete…")
         self.delete_button.setToolTip("Delete the selected photos shown from the SD card (Delete)")
         self.delete_button.clicked.connect(self.delete_requested)
+        for button, name in (
+            (self.select_all_button, "square-check"),
+            (self.select_none_button, "square"),
+            (self.delete_button, "trash-2"),
+        ):
+            set_icon(button, name)
         self.size_slider = QSlider(Qt.Orientation.Horizontal)
         self.size_slider.setRange(0, len(SIZES) - 1)
         self.size_slider.setPageStep(1)
@@ -427,7 +433,11 @@ class ThumbnailGrid(QWidget):
         self.size_slider.valueChanged.connect(self.set_thumbnail_size)
         self.size_label = QLabel()
         self.size_label.setMinimumWidth(QLabel("Medium").sizeHint().width())
-        row.addWidget(QLabel("Size:"))
+        size_icon = QLabel()
+        size_icon.setToolTip("Thumbnail size")
+        size_icon.setPixmap(icon("zoom-in").pixmap(16, 16))
+        self._size_icon = size_icon
+        row.addWidget(size_icon)
         row.addWidget(self.size_slider)
         row.addWidget(self.size_label)
         row.addSpacing(8)
@@ -672,6 +682,7 @@ class ThumbnailGrid(QWidget):
 
     def restyle(self) -> None:
         """Redraw for a new light/dark palette (placeholder tiles have their own colours)."""
+        self._size_icon.setPixmap(icon("zoom-in").pixmap(16, 16))
         self._fit(force=True)
         self.list.viewport().update()
 

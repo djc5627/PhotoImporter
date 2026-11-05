@@ -148,3 +148,32 @@ def test_import_breakdown_counts_pictures_per_camera_and_status(tmp_path, card, 
     assert (breakdown.pictures, breakdown.files, breakdown.hidden) == (2, 4, 1)
     assert breakdown.statuses == ["new", "deleted"]
     assert dict(breakdown.not_importing) == {"already": 1}
+
+
+def test_card_title_and_subtitle(tmp_path):
+    from photoimporter.core.models import Camera, PhotoFile, PhotoMeta
+    from photoimporter.core.planner import CameraGroup, ImportPlan, card_subtitle, card_title
+
+    def shot(name, when):
+        return PhotoFile(tmp_path / name, 1, 0, PhotoMeta(capture_time=when))
+
+    ricoh = CameraGroup(Camera("RICOH", "GR III", "Ricoh GR III", "ricoh"), True)
+    ricoh.new = [shot("A.JPG", "2026:10:12 09:00:00"), shot("B.JPG", "2026:10:20 09:00:00")]
+    ricoh.already = [shot("C.JPG", "2026:10:15 09:00:00")]
+    sony = CameraGroup(Camera("SONY", "RX100", "RX100", "sony"), True)
+    sony.new = [shot("D.JPG", "2026:10:20 10:00:00")]
+    plan = ImportPlan(tmp_path, tmp_path, [sony, ricoh])
+
+    drive = Path(tmp_path.anchor)
+    assert card_title(plan, drive) == "Ricoh GR III & RX100 card"  # most photos first
+    assert card_title(plan, tmp_path) == "Ricoh GR III & RX100"  # a folder, not a card
+    assert card_title(None, None) == "Photo Importer"
+    assert card_title(None, tmp_path) == tmp_path.name
+    assert card_subtitle(plan) == "4 photos taken Oct 12 – Oct 20 · 3 new since your last import"
+    assert card_subtitle(None) == "Insert an SD card, or choose a card or folder."
+
+    ricoh.new, sony.new = [], []
+    ricoh.already = [shot("C.JPG", "2025:12:30 09:00:00"), shot("E.JPG", "2026:01:02 09:00:00")]
+    assert card_subtitle(plan) == (
+        "2 photos taken Dec 30, 2025 – Jan 2, 2026 · nothing new since your last import"
+    )
