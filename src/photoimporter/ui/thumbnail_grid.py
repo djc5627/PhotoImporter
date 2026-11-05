@@ -29,6 +29,7 @@ from PySide6.QtGui import (
     QImage,
     QImageReader,
     QPainter,
+    QPainterPath,
     QPalette,
     QPen,
     QPixmap,
@@ -37,6 +38,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QListView,
@@ -54,14 +56,14 @@ from PySide6.QtWidgets import (
 from ..core.models import PhotoFile
 from ..core.planner import STATUS_LABELS, STATUSES, CameraGroup, ImportPlan
 from ..core.thumbnails import Shot, Thumbnail, ThumbnailSource, group_shots
-from .theme import accent, colors, muted
+from .theme import accent, colors, current_surfaces, muted
 
 # Tile sizes for the size slider. Large uses the cameras' bigger embedded preview.
 SIZES = [("Small", QSize(120, 90)), ("Medium", QSize(160, 120)), ("Large", QSize(320, 240))]
 DEFAULT_SIZE = 1
 SMALL_IMAGE = QSize(160, 120)  # what the camera's small thumbnail gives
 LARGE_IMAGE = QSize(384, 288)  # room for Large tiles stretched to fill the row
-TILE_PADDING = QSize(20, 40)  # around the image: the border and the file name
+TILE_PADDING = QSize(28, 44)  # around the image: the border and the file name
 
 
 def _is_large(size: QSize) -> bool:
@@ -210,11 +212,13 @@ def _with_status(pixmap: QPixmap, status: str, size: QSize) -> QPixmap:
     result.fill(Qt.GlobalColor.transparent)
     painter = QPainter(result)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.drawPixmap(
-        (size.width() - pixmap.width()) // 2,
-        (size.height() - pixmap.height()) // 2,
-        pixmap,
-    )
+    left = (size.width() - pixmap.width()) // 2
+    top = (size.height() - pixmap.height()) // 2
+    clip = QPainterPath()  # rounded corners on the photo
+    clip.addRoundedRect(QRectF(left, top, pixmap.width(), pixmap.height()), 8, 8)
+    painter.setClipPath(clip)
+    painter.drawPixmap(left, top, pixmap)
+    painter.setClipping(False)
     font = painter.font()
     font.setPointSizeF(max(font.pointSizeF() - 1, 7))
     font.setBold(True)
@@ -224,9 +228,10 @@ def _with_status(pixmap: QPixmap, status: str, size: QSize) -> QPixmap:
     height = painter.fontMetrics().height() + 2
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(QColor(STATUS_COLORS[status]))
-    painter.drawRoundedRect(3, 3, width, height, 4, 4)
+    x, y = left + 6, top + 6  # a pill on the photo's corner
+    painter.drawRoundedRect(QRectF(x, y, width + 4, height), height / 2, height / 2)
     painter.setPen(QColor("white"))
-    painter.drawText(3, 3, width, height, Qt.AlignmentFlag.AlignCenter, text)
+    painter.drawText(x, y, width + 4, height, Qt.AlignmentFlag.AlignCenter, text)
     painter.end()
     return result
 
@@ -279,6 +284,15 @@ class _TileDelegate(QStyledItemDelegate):
             self._paint_header(painter, option, header, index.data(CHOSEN_ROLE) or "off")
             return
         chosen = index.data(CHOSEN_ROLE) or "off"
+        card = QRectF(option.rect).adjusted(4, 4, -4, -4)
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(current_surfaces().tile))
+        if chosen == "off":
+            painter.setOpacity(0.45)
+        painter.drawRoundedRect(card, 12, 12)
+        painter.restore()
         opt = QStyleOptionViewItem(option)
         opt.state &= ~(QStyle.StateFlag.State_Selected | QStyle.StateFlag.State_HasFocus)
         painter.save()
@@ -289,12 +303,12 @@ class _TileDelegate(QStyledItemDelegate):
         if chosen != "off":
             painter.save()
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            pen = QPen(accent(), 4)
+            pen = QPen(accent(), 3)
             if chosen == "part":
                 pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRoundedRect(QRectF(option.rect).adjusted(3, 3, -3, -3), 6, 6)
+            painter.drawRoundedRect(card.adjusted(1.5, 1.5, -1.5, -1.5), 11, 11)
             painter.restore()
         if option.state & QStyle.StateFlag.State_HasFocus:
             painter.save()
@@ -345,8 +359,6 @@ class _TileDelegate(QStyledItemDelegate):
             int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
             header.counts,
         )
-        painter.setPen(QPen(QColor(colors().separator), 1))
-        painter.drawLine(rect.left() + 4, rect.bottom(), rect.right() - 4, rect.bottom())
         painter.restore()
 
 
@@ -424,6 +436,7 @@ class ThumbnailGrid(QWidget):
         layout.addLayout(row)
 
         self.list = QListWidget()
+        self.list.setObjectName("thumbnails")
         self.list.setViewMode(QListView.ViewMode.IconMode)
         self.list.setResizeMode(QListView.ResizeMode.Adjust)
         self.list.setMovement(QListView.Movement.Static)
@@ -439,7 +452,12 @@ class ThumbnailGrid(QWidget):
         self.list.viewport().installEventFilter(self)  # Ctrl+scroll and resizes arrive here
         # Always there, so it appearing doesn't change the width and the columns.
         self.list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-        layout.addWidget(self.list)
+        panel = QFrame()
+        panel.setObjectName("panel")  # a rounded panel behind the thumbnails
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(10, 4, 4, 10)
+        panel_layout.addWidget(self.list)
+        layout.addWidget(panel)
         self._apply_size()
         self._refresh_buttons()
 

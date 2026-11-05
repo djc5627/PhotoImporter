@@ -130,13 +130,16 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("Photo Importer")
         central = QWidget()
+        central.setObjectName("central")  # the stylesheet paints its background
         layout = QVBoxLayout(central)
+        layout.setContentsMargins(18, 14, 18, 16)
+        layout.setSpacing(12)
         layout.addWidget(self._build_update_bar())
-        layout.addLayout(self._build_setup())
-        line = QFrame()
-        line.setFrameShape(QFrame.Shape.HLine)
-        line.setFrameShadow(QFrame.Shadow.Sunken)
-        layout.addWidget(line)
+        setup = QFrame()
+        setup.setObjectName("panel")
+        setup.setLayout(self._build_setup())
+        setup.layout().setContentsMargins(16, 12, 16, 12)
+        layout.addWidget(setup)
         layout.addWidget(self._build_plan_box(), stretch=1)
         layout.addLayout(self._build_footer())
         self.setCentralWidget(central)
@@ -166,19 +169,20 @@ class MainWindow(QMainWindow):
     def _apply_styles(self) -> None:
         """Styles with colours of their own, for the current light/dark palette."""
         c = colors()
+        color = accent()
+        light, dark = color.lighter(118).name(), color.darker(118).name()
+        self.import_button.setStyleSheet(
+            "#importButton { color: white; font-weight: 600; border: none; border-radius: 11px;"
+            " padding: 9px 22px;"
+            f" background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {light},"
+            f" stop:0.5 {color.name()}, stop:1 {dark}); }}"
+            f"#importButton:hover {{ background: {light}; }}"
+            f"#importButton:pressed {{ background: {dark}; }}"
+            f"#importButton:disabled {{ background: {c.disabled_bg}; color: {c.disabled_text}; }}"
+        )
         self.update_bar.setStyleSheet(
             f"#updateBar {{ background: {c.banner_bg}; border: 1px solid {c.banner_border};"
-            " border-radius: 4px; }"
-        )
-        color = accent()
-        self.import_button.setStyleSheet(
-            f"#importButton {{ background: {color.name()}; color: white; font-weight: 600;"
-            f" border: 1px solid {color.darker(120).name()}; border-radius: 4px;"
-            " padding: 6px 18px; }"
-            f"#importButton:hover {{ background: {color.lighter(110).name()}; }}"
-            f"#importButton:pressed {{ background: {color.darker(120).name()}; }}"
-            f"#importButton:disabled {{ background: {c.disabled_bg}; color: {c.disabled_text};"
-            f" border-color: {c.disabled_border}; }}"
+            " border-radius: 12px; }"
         )
 
     def _on_color_scheme_changed(self, *_: object) -> None:

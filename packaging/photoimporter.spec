@@ -6,7 +6,10 @@ ROOT = Path(SPECPATH).parent  # noqa: F821 (SPECPATH is set by PyInstaller)
 a = Analysis(  # noqa: F821
     [str(ROOT / "packaging" / "launcher.py")],
     pathex=[str(ROOT / "src")],
-    datas=[(str(ROOT / "src" / "photoimporter" / "ui" / "icon.png"), "photoimporter/ui")],
+    datas=[
+        (str(ROOT / "src" / "photoimporter" / "ui" / "icon.png"), "photoimporter/ui"),
+        (str(ROOT / "src" / "photoimporter" / "ui" / "fonts"), "photoimporter/ui/fonts"),
+    ],
     excludes=["tkinter"],
 )
 pyz = PYZ(a.pure)  # noqa: F821

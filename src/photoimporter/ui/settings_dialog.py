@@ -70,7 +70,7 @@ class AccentPicker(QWidget):
             color = accent_color(name).name()
             button.setStyleSheet(
                 f"QToolButton {{ background: {color}; border: 2px solid {color};"
-                " border-radius: 13px; }"
+                " border-radius: 13px; padding: 0; font-weight: 700; }"
                 "QToolButton:checked { border: 3px solid palette(window-text); }"
             )
             if name == "system":

@@ -409,12 +409,12 @@ def test_size_slider_switches_to_large_previews_and_is_remembered(qtbot, window,
 @pytest.mark.parametrize(
     ("index", "width", "columns"),
     [
-        (1, 1240, 7),  # 7.05 tiles of 180 px: 7, stretched a little
-        (1, 1150, 6),  # 6.4: 6
-        (1, 1080, 6),  # exactly 6
-        (1, 1170, 7),  # 6.5: at least half of a 7th fits, so 7, shrunk a little
+        (1, 1240, 7),  # 6.6 tiles of 188 px (160 + padding): 7, shrunk a little
+        (1, 1150, 6),  # 6.1: 6, stretched a little
+        (1, 1128, 6),  # exactly 6
+        (1, 1222, 7),  # 6.5: at least half of a 7th fits, so 7, shrunk a little
         (2, 1240, 4),  # Large 3.6 tiles: 4
-        (0, 1240, 9),  # Small 8.9: 9
+        (0, 1240, 8),  # Small 8.4: 8
         (1, 100, 1),  # never fewer than one
     ],
 )
@@ -961,3 +961,16 @@ def test_accent_colour_is_chosen_in_settings_and_used(qtbot, window, qapp, light
     assert accent_choice(window.db) == "system"
     window.db.set_setting("accent", "chartreuse")
     assert accent_choice(window.db) == "blue"  # unknown values fall back
+
+
+def test_modern_style_uses_bundled_font_and_accent(qtbot, window, qapp, light_afterwards):
+    from photoimporter.core.config import ACCENTS
+    from photoimporter.ui.theme import FONT_FAMILY, load_fonts
+
+    assert load_fonts()  # the bundled Inter files
+    assert qapp.font().family() == FONT_FAMILY
+    assert "QFrame#panel" in qapp.styleSheet()
+    window.db.set_setting("accent", "purple")
+    window._apply_settings()
+    assert ACCENTS["purple"] in qapp.styleSheet()
+    assert window.centralWidget().objectName() == "central"
