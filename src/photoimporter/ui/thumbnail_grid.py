@@ -63,7 +63,7 @@ SIZES = [("Small", QSize(120, 90)), ("Medium", QSize(160, 120)), ("Large", QSize
 DEFAULT_SIZE = 1
 SMALL_IMAGE = QSize(160, 120)  # what the camera's small thumbnail gives
 LARGE_IMAGE = QSize(384, 288)  # room for Large tiles stretched to fill the row
-TILE_PADDING = QSize(28, 44)  # around the image: the border and the file name
+TILE_PADDING = QSize(28, 54)  # around the image: the border and the file name
 
 
 def _is_large(size: QSize) -> bool:
@@ -296,15 +296,32 @@ class _TileDelegate(QStyledItemDelegate):
         painter.setOpacity(dim)
         painter.drawRoundedRect(card, 12, 12)
         painter.restore()
-        opt = QStyleOptionViewItem(option)
-        opt.state &= ~(
-            QStyle.StateFlag.State_Selected
-            | QStyle.StateFlag.State_HasFocus
-            | QStyle.StateFlag.State_MouseOver  # drawn above, as the card
-        )
+        # The photo and its name, inside the card with a margin, so a photo that fills its
+        # whole area never runs under the selection outline.
+        name_height = option.fontMetrics.height() + 8
+        photo_area = card.adjusted(9, 9, -9, -(name_height + 2)).toRect()
         painter.save()
         painter.setOpacity(dim)
-        super().paint(painter, opt, index)
+        photo = index.data(Qt.ItemDataRole.DecorationRole)
+        if isinstance(photo, QIcon):
+            pixmap = photo.pixmap(photo_area.size())
+            size = pixmap.deviceIndependentSize().toSize()
+            painter.drawPixmap(
+                photo_area.x() + (photo_area.width() - size.width()) // 2,
+                photo_area.y() + (photo_area.height() - size.height()) // 2,
+                pixmap,
+            )
+        name_rect = QRectF(
+            card.left() + 6, card.bottom() - name_height - 4, card.width() - 12, name_height
+        )
+        painter.setPen(option.palette.color(QPalette.ColorRole.Text))
+        painter.setFont(option.font)
+        name = option.fontMetrics.elidedText(
+            str(index.data(Qt.ItemDataRole.DisplayRole) or ""),
+            Qt.TextElideMode.ElideRight,
+            int(name_rect.width()),
+        )
+        painter.drawText(name_rect, int(Qt.AlignmentFlag.AlignCenter), name)
         painter.restore()
         if chosen != "off":
             painter.save()
