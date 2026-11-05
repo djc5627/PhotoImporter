@@ -183,6 +183,7 @@ class MainWindow(QMainWindow):
 
         self._refresh_library_label()
         self._refresh_target_preview()
+        self._refresh_header()
         self.status_label.setText("")  # the header and panel say what to do
         self.card_watcher = CardWatcher(card_detector, card_poll_ms, self)
         self.card_watcher.inserted.connect(self.on_card_inserted)
@@ -498,6 +499,7 @@ class MainWindow(QMainWindow):
         self.grid = ThumbnailGrid(self.thumbnail_factory)
         self.grid.selection_changed.connect(self._refresh_selection_view)
         self.grid.delete_requested.connect(self.delete_selected)
+        self.grid.empty_button.clicked.connect(self.choose_source)
         saved = self.db.get_setting(THUMBNAIL_SIZE_SETTING)
         if saved and saved.isdigit():
             self.grid.set_thumbnail_size(int(saved))

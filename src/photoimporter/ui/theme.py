@@ -297,6 +297,7 @@ QMainWindow, QDialog {{ background: {s.bg}; }}
 }}
 QFrame#panel {{ background: {s.panel}; border: 1px solid {s.line}; border-radius: 16px; }}
 QLabel#title {{ font-size: 19pt; font-weight: 700; }}
+QLabel#emptyTitle {{ font-size: 14pt; font-weight: 600; padding-top: 6px; }}
 QLabel#panelTitle {{ font-size: 13pt; font-weight: 600; padding: 2px 4px 6px 4px; }}
 QLabel#section {{ color: {s.muted}; font-size: 8pt; font-weight: 600; letter-spacing: 1px;
   padding: 10px 4px 2px 4px; }}
@@ -391,9 +392,14 @@ QTabBar::tab {{ background: transparent; color: {s.muted}; padding: 8px 16px; ma
 QTabBar::tab:selected {{ background: {s.panel}; color: {a}; border-color: {s.line};
   border-bottom-color: {s.panel}; font-weight: 600; }}
 QTableWidget, QTreeWidget {{ background: {s.panel}; alternate-background-color: {s.tile};
-  border: 1px solid {s.line}; border-radius: 10px; gridline-color: {s.line}; }}
+  border: 1px solid {s.line}; border-radius: 10px; gridline-color: transparent;
+  selection-background-color: {soft}; selection-color: {s.text}; outline: none; }}
+QTableWidget::item, QTreeWidget::item {{ padding: 0 8px; border-bottom: 1px solid {s.line}; }}
+QHeaderView {{ background: transparent; }}
 QHeaderView::section {{ background: {s.field}; color: {s.muted}; border: none;
-  border-bottom: 1px solid {s.line}; padding: 6px 8px; font-weight: 600; }}
+  border-bottom: 1px solid {s.line}; padding: 7px 8px; font-weight: 600; text-align: left; }}
+QHeaderView::section:first {{ border-top-left-radius: 9px; }}
+QHeaderView::section:last {{ border-top-right-radius: 9px; }}
 QTableCornerButton::section {{ background: {s.field}; border: none; }}
 """
 

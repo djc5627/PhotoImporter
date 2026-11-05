@@ -284,20 +284,26 @@ class _TileDelegate(QStyledItemDelegate):
             self._paint_header(painter, option, header, index.data(CHOSEN_ROLE) or "off")
             return
         chosen = index.data(CHOSEN_ROLE) or "off"
+        hover = bool(option.state & QStyle.StateFlag.State_MouseOver)
+        # Unselected photos are dimmed, a little less under the mouse.
+        dim = (0.7 if hover else 0.45) if chosen == "off" else 1.0
         card = QRectF(option.rect).adjusted(4, 4, -4, -4)
+        surfaces = current_surfaces()
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(current_surfaces().tile))
-        if chosen == "off":
-            painter.setOpacity(0.45)
+        painter.setPen(QPen(QColor(surfaces.line), 1) if hover else Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(surfaces.field_hover if hover else surfaces.tile))
+        painter.setOpacity(dim)
         painter.drawRoundedRect(card, 12, 12)
         painter.restore()
         opt = QStyleOptionViewItem(option)
-        opt.state &= ~(QStyle.StateFlag.State_Selected | QStyle.StateFlag.State_HasFocus)
+        opt.state &= ~(
+            QStyle.StateFlag.State_Selected
+            | QStyle.StateFlag.State_HasFocus
+            | QStyle.StateFlag.State_MouseOver  # drawn above, as the card
+        )
         painter.save()
-        if chosen == "off":
-            painter.setOpacity(0.45)
+        painter.setOpacity(dim)
         super().paint(painter, opt, index)
         painter.restore()
         if chosen != "off":
@@ -449,6 +455,8 @@ class ThumbnailGrid(QWidget):
 
         self.list = QListWidget()
         self.list.setObjectName("thumbnails")
+        self.list.setMouseTracking(True)  # for the hover highlight
+        self.list.viewport().setAttribute(Qt.WidgetAttribute.WA_Hover)
         self.list.setViewMode(QListView.ViewMode.IconMode)
         self.list.setResizeMode(QListView.ResizeMode.Adjust)
         self.list.setMovement(QListView.Movement.Static)
@@ -469,6 +477,7 @@ class ThumbnailGrid(QWidget):
         panel_layout = QVBoxLayout(panel)
         panel_layout.setContentsMargins(10, 4, 4, 10)
         panel_layout.addWidget(self.list)
+        panel_layout.addWidget(self._build_empty_view())
         layout.addWidget(panel)
         self._apply_size()
         self._refresh_buttons()
@@ -488,7 +497,46 @@ class ThumbnailGrid(QWidget):
         self.plan = plan
         self.groups = list(groups or (plan.groups if plan else []))
         self._refresh_combo()
+        self._refresh_empty_view()
         self._rebuild()
+
+    def _build_empty_view(self) -> QWidget:
+        """What the grid shows before a card is chosen, or when it has no photos."""
+        self.empty_view = QWidget()
+        outer = QVBoxLayout(self.empty_view)
+        outer.addStretch(1)
+        self.empty_icon = QLabel()
+        self.empty_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_title = QLabel()
+        self.empty_title.setObjectName("emptyTitle")
+        self.empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_text = muted(QLabel())
+        self.empty_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_text.setWordWrap(True)
+        self.empty_button = QPushButton("Choose a folder…")
+        set_icon(self.empty_button, "folder-open")
+        for widget in (self.empty_icon, self.empty_title, self.empty_text):
+            outer.addWidget(widget)
+        outer.addSpacing(8)
+        outer.addWidget(self.empty_button, alignment=Qt.AlignmentFlag.AlignCenter)
+        outer.addStretch(2)
+        self._refresh_empty_view()
+        return self.empty_view
+
+    def _refresh_empty_view(self) -> None:
+        empty_card = self.plan is not None and not self.plan.photos()
+        self.empty_view.setVisible(self.plan is None or empty_card)
+        self.list.setVisible(not self.empty_view.isVisibleTo(self))
+        if empty_card:
+            self.empty_title.setText("No photos on this card")
+            self.empty_text.setText("There are no JPG or RAW files on it.")
+        else:
+            self.empty_title.setText("Insert an SD card")
+            self.empty_text.setText(
+                "Photo Importer shows what's on it and which photos\naren't in your library yet."
+            )
+        self.empty_button.setVisible(not empty_card)
+        self.empty_icon.setPixmap(icon("hard-drive", 44, current_surfaces().muted).pixmap(44, 44))
 
     @property
     def nominal_size(self) -> QSize:
@@ -685,6 +733,7 @@ class ThumbnailGrid(QWidget):
     def restyle(self) -> None:
         """Redraw for a new light/dark palette (placeholder tiles have their own colours)."""
         self._size_icon.setPixmap(icon("zoom-in").pixmap(16, 16))
+        self._refresh_empty_view()
         self._fit(force=True)
         self.list.viewport().update()
 

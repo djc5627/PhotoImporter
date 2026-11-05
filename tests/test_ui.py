@@ -1003,3 +1003,18 @@ def test_header_names_the_card_and_its_menu_picks_a_card(qtbot, window, card, mo
     assert window.card_button.text() == card.name  # a folder in the tests, not a drive
     assert window.title_label.text() == "RICOH GR III"
     assert window.subtitle_label.text() == ("2 photos taken Nov 2 · 2 new since your last import")
+
+
+def test_grid_explains_what_to_do_before_a_card_and_on_an_empty_card(qtbot, window, tmp_path):
+    grid = window.grid
+    assert not grid.empty_view.isHidden() and grid.list.isHidden()
+    assert grid.empty_title.text() == "Insert an SD card"
+    assert not grid.empty_button.isHidden()
+
+    empty = tmp_path / "empty card"
+    (empty / "DCIM").mkdir(parents=True)
+    window.set_source(empty)
+    with qtbot.waitSignal(window.plan_ready, timeout=10_000):
+        window.find_button.click()
+    assert grid.empty_title.text() == "No photos on this card"
+    assert grid.empty_button.isHidden()

@@ -131,7 +131,7 @@ class SettingsDialog(QDialog):
         self.db = db
         self.update_checker = update_checker
         self.setWindowTitle("Settings")
-        self.resize(760, 420)
+        self.resize(860, 440)
         layout = QVBoxLayout(self)
         tabs = QTabWidget()
         tabs.addTab(self._build_general(), "General")
@@ -290,7 +290,10 @@ class SettingsDialog(QDialog):
         self.camera_table.setHorizontalHeaderLabels(_CAMERA_COLUMNS)
         self.camera_table.verticalHeader().setVisible(False)
         self.camera_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.camera_table.setShowGrid(False)
+        self.camera_table.verticalHeader().setVisible(False)
         header = self.camera_table.horizontalHeader()
+        header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self._cameras = sorted(self.db.cameras().values(), key=lambda c: c.nickname.lower())
