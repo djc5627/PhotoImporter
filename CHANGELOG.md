@@ -2,6 +2,12 @@
 
 All notable changes to Photo Importer. Each version's section becomes the notes of its [GitHub release](https://github.com/djc5627/PhotoImporter/releases).
 
+## [2.0.1] - 2026-11-17
+
+### Fixed
+- **RAW+JPG pairs are judged together.** If either file of a pair is in your library, the whole photo counts as *Already imported*. Before, a pair whose JPG you had deleted or replaced with an export (while keeping the RAW) showed as *Probably deleted*, *Deleted* or even *New*, and the JPG could be imported again. A pair is now only *Probably deleted*, *Deleted* or *New* when neither file is in your library. The tooltip says when a file counts as imported because its pair is in the library.
+- If an import is cut short after copying only one file of a pair, the other file is still offered next time.
+
 ## [2.0.0] - 2026-11-05
 
 A redesigned, more modern look. Everything works as before; some controls have moved.

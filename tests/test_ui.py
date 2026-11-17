@@ -142,7 +142,7 @@ def test_old_style_folders_are_left_alone(qtbot, window, card, library):
     window.set_source(card)
     with qtbot.waitSignal(window.plan_ready, timeout=10_000):
         window.find_button.click()
-    assert len(window.plan.groups[0].already) == 1
+    assert len(window.plan.groups[0].already) == 2  # the JPG, and its RAW with it
     with qtbot.waitSignal(window.import_done, timeout=10_000):
         window.import_button.click()
 
@@ -151,6 +151,7 @@ def test_old_style_folders_are_left_alone(qtbot, window, card, library):
     assert [p for p in library.iterdir()] == [old]
     assert (old / "R0000001.JPG").is_file()
     assert (old / "ricoh gr iii" / "jpg" / "R0000002.JPG").is_file()
+    assert not (old / "ricoh gr iii" / "raw").exists()  # R0000001.DNG counts as imported
 
 
 def test_deleted_photos_are_skipped_until_ticked(qtbot, window, card, library):
@@ -1018,3 +1019,20 @@ def test_grid_explains_what_to_do_before_a_card_and_on_an_empty_card(qtbot, wind
         window.find_button.click()
     assert grid.empty_title.text() == "No photos on this card"
     assert grid.empty_button.isHidden()
+
+
+def test_pair_with_one_file_in_the_library_shows_as_imported(qtbot, window, card, library):
+    # The RAW was kept in the library; the JPG was replaced by an export (a different name).
+    copy_by_hand(card / "DCIM" / "100RICOH" / "R0000001.DNG", library / "old" / "R0000001.DNG")
+    copy_by_hand(card / "DCIM" / "100RICOH" / "R0000001.JPG", library / "old" / "R0000001_1.jpg")
+    window.set_source(card)
+    with qtbot.waitSignal(window.grid.thumbnails_loaded, timeout=10_000):
+        window.find_button.click()
+    grid = window.grid
+    tile = grid.item_for("R0000001")
+    assert grid._shot_status(tile.data(Qt.ItemDataRole.UserRole)) == "already"
+    assert "R0000001.JPG (not in your library, but counted as imported" in tile.toolTip()
+    assert "R0000001.DNG (already imported)" in tile.toolTip()
+    assert chosen(grid)["R0000001"] == "off"
+    assert window.import_button.text() == "Import 1 photo"  # just R0000002
+    assert window.rows["already"].number.text() == "1"

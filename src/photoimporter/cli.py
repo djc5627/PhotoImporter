@@ -98,6 +98,7 @@ def _make_plan(args: argparse.Namespace, db: Database, reader: MetadataReader) -
         db.deleted_keys(),
         db.newest_capture_by_model(),
         db.newest_capture_by_model(include_deleted=False),
+        db.imported_sources(),
     )
     apply_camera_suggestions(plan, LibraryLayout.from_db(db, root))
     plan.include_recent_deleted = args.include_recent_deleted

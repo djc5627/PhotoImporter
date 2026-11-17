@@ -891,12 +891,7 @@ class ThumbnailGrid(QWidget):
 
     def _tooltip(self, shot: Shot) -> str:
         meta = shot.primary.meta
-        lines = [
-            ", ".join(
-                f"{p.filename} ({STATUS_LABELS[self._statuses.get(p.path, 'new')].lower()})"
-                for p in shot.photos
-            )
-        ]
+        lines = [", ".join(self._file_status(p) for p in shot.photos)]
         camera = " ".join(filter(None, (meta.make, meta.model)))
         if camera:
             lines.append(camera)
@@ -905,6 +900,13 @@ class ThumbnailGrid(QWidget):
             lines.append(f"{day.replace(':', '-')} {clock}")
         lines.append("Click to select, Shift-click to select a range, double-click to open")
         return "\n".join(lines)
+
+    def _file_status(self, photo: PhotoFile) -> str:
+        """E.g. "R0000001.JPG (already imported)"."""
+        status = self._statuses.get(photo.path, "new")
+        if status == "already" and self.plan is not None and photo.path not in self.plan.in_library:
+            return f"{photo.filename} (not in your library, but counted as imported with its pair)"
+        return f"{photo.filename} ({STATUS_LABELS[status].lower()})"
 
     def _open(self, item: QListWidgetItem) -> None:
         shot: Shot = item.data(Qt.ItemDataRole.UserRole)

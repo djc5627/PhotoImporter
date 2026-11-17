@@ -8,7 +8,14 @@ from photoimporter.core.planner import build_plan
 
 
 def plan_for(db, card, target, reader):
-    return build_plan(card, target, scan_source(card, reader), db.existing_keys(), db.cameras())
+    return build_plan(
+        card,
+        target,
+        scan_source(card, reader),
+        db.existing_keys(),
+        db.cameras(),
+        imported_sources=db.imported_sources(),
+    )
 
 
 def test_import_then_replan_finds_nothing_new(db, card, library, reader):
@@ -31,8 +38,9 @@ def test_photos_copied_by_hand_are_recognised(db, card, library, reader):
 
     plan = plan_for(db, card, library / "new", reader)
 
-    assert plan.already_count == 1
-    assert {p.filename for g in plan.groups for p in g.new} == {"R0000001.DNG", "R0000002.JPG"}
+    # Its RAW counts as imported with it: one file of a pair in the library is enough.
+    assert plan.already_count == 2
+    assert {p.filename for g in plan.groups for p in g.new} == {"R0000002.JPG"}
 
 
 def test_rerun_after_interruption_completes_without_duplicates(db, card, library, reader):
@@ -93,6 +101,7 @@ def replan_with_history(db, card, library, reader):
         db.deleted_keys(),
         db.newest_capture_by_model(),
         db.newest_capture_by_model(include_deleted=False),
+        db.imported_sources(),
     )
 
 
@@ -100,7 +109,8 @@ def test_deleted_photos_are_split_by_newest_photo_still_in_library(db, card, lib
     target = library / "2026.11.02 Hike"
     execute_plan(plan_for(db, card, target, reader), db)
     # A cull in Capture One. The newest photo kept is R0000001.DNG (10:00), so the deleted
-    # R0000002.JPG (10:05) is recent, and R0000001.JPG (10:00, not newer) is an older deletion.
+    # R0000002.JPG (10:05) is recent. R0000001.JPG's RAW is still in the library, so that
+    # pair counts as imported: deleting just the JPG of a pair isn't a deletion of the photo.
     (target / "ricoh gr iii" / "jpg" / "R0000001.JPG").unlink()
     (target / "ricoh gr iii" / "jpg" / "R0000002.JPG").unlink()
     scan_library(db, library, reader)
@@ -109,8 +119,8 @@ def test_deleted_photos_are_split_by_newest_photo_still_in_library(db, card, lib
 
     group = plan.groups[0]
     assert [p.filename for p in group.recent_deleted] == ["R0000002.JPG"]
-    assert [p.filename for p in group.deleted] == ["R0000001.JPG"]
-    assert (plan.new_count, plan.already_count) == (0, 1)
+    assert group.deleted == []
+    assert (plan.new_count, plan.already_count) == (0, 2)
     assert plan.items == []
 
 
