@@ -48,7 +48,7 @@ Decisions so far:
 - When an unregistered camera has photos to import, a dialog asks for these on Import. They are pre-filled from the library: the camera folder and subfolders most often used by that camera model's photos in `<date>/<camera>/<subfolder>/<photo>` paths, falling back to the lowercase EXIF model and `jpg`/`raw`. This also matches cameras that were used before the app existed. The CLI uses the same suggestions without asking.
 
 **Deleted photos:**
-Each card photo falls into one of five groups:
+Each card photo falls into one of five groups. A RAW+JPG pair (same folder, name and capture time) is decided together, from the first rule either file meets: in the library makes the whole pair *Already imported* (e.g. the JPG was culled or replaced by an export while the RAW was kept); else in the deleted-photos history makes it deleted; else the time rules below apply to the pair. Exception: if this app copied one file of the pair (`import_files`) but never the other, the import was cut short, so the other file is decided on its own and normally offered as new.
 1. **New:** imported.
 2. **Already imported:** in the library now. Skipped.
 3. **Recently deleted:** in the deleted-photos history, and its capture time is newer than the newest photo from the same camera model still in the library (or that camera has no photos left). Typically a just-deleted import folder. Kept apart from group 4 so it can be restored without bringing back every older cull. Skipped unless the user turns on its switch in the *This import* panel.

@@ -219,6 +219,13 @@ class Database:
         self.conn.commit()
         return cur.lastrowid
 
+    def imported_sources(self) -> set[str]:
+        """Card files (normalised paths) this app has copied, or found already copied."""
+        rows = self.conn.execute(
+            "SELECT src FROM import_files WHERE status NOT LIKE 'failed%'"
+        ).fetchall()
+        return {norm_path(src) for (src,) in rows}
+
     def log_import_file(self, import_id: int, src: Path, dest: Path, status: str) -> None:
         self.conn.execute(
             "INSERT INTO import_files VALUES (?, ?, ?, ?)", (import_id, str(src), str(dest), status)

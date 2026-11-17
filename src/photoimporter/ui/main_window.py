@@ -727,6 +727,7 @@ class MainWindow(QMainWindow):
                     db.deleted_keys(),
                     db.newest_capture_by_model(),
                     db.newest_capture_by_model(include_deleted=False),
+                    db.imported_sources(),
                 )
                 layout = LibraryLayout.from_db(db, root)
                 apply_camera_suggestions(plan, layout)

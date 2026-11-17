@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 
-from .models import Camera, PhotoFile, PhotoKey
+from .models import Camera, PhotoFile, PhotoKey, norm_path
 
 
 @dataclass
@@ -76,6 +76,9 @@ class ImportPlan:
     # these, except photos already in the library unless `allow_reimport` is on.
     selected: set[Path] | None = None
     allow_reimport: bool = False
+    # Card files actually found in the library. A pair counts as already imported when one
+    # of its files is, so the other can be in `already` without being here.
+    in_library: set[Path] = field(default_factory=set)
 
     def __post_init__(self) -> None:
         if self.selected is None:
@@ -199,17 +202,62 @@ def build_plan(
     deleted_keys: set[PhotoKey] | None = None,
     newest_by_model: Mapping[str, str] | None = None,
     newest_present_by_model: Mapping[str, str] | None = None,
+    imported_sources: set[str] | None = None,
 ) -> ImportPlan:
     """Sort card photos into new, already imported and the deleted groups.
 
+    A RAW+JPG pair is decided together: if either file is in the library, both count as
+    already imported (e.g. the JPG was deleted or replaced by an export, the RAW kept).
+    Otherwise either file being in the deleted-photos history makes the pair deleted.
+
     `newest_by_model` is the newest capture time per model over current and deleted library
     photos; `newest_present_by_model` over current ones only. Without the latter, deleted
-    photos are not split into recent and older.
+    photos are not split into recent and older. `imported_sources` (normalised card paths
+    this app has copied) tells an import that was cut short halfway through a pair, whose
+    other file is then still to import, from a file that was deleted or replaced.
     """
+    from .thumbnails import group_shots  # here to avoid an import cycle
+
+    photos = list(photos)
     deleted_keys = deleted_keys or set()
     newest_by_model = newest_by_model or {}
+
+    def classify(files: list[PhotoFile]) -> str:
+        """The status of a picture made of `files` (a RAW+JPG pair, or one file)."""
+        keys = [p.key for p in files]
+        times = [p.meta.capture_time for p in files if p.meta.capture_time]
+        when = times[0] if times else None
+        model = (next((p.meta.model for p in files if p.meta.model), "") or "").strip()
+        newest = newest_by_model.get(model)
+        if any(k in existing_keys for k in keys):
+            return "already"
+        if any(k in deleted_keys for k in keys):
+            if newest_present_by_model is not None and when:
+                present = newest_present_by_model.get(model)
+                if present is None or when > present:
+                    return "recent_deleted"
+            return "deleted"
+        if newest and when and when < newest:
+            return "older"
+        return "new"
+
+    imported = imported_sources or set()
+    status_of: dict[Path, str] = {}
+    for shot in group_shots(photos):
+        status = classify(shot.photos)
+        missing = [p for p in shot.photos if p.key not in existing_keys]
+        unfinished = (
+            status == "already"
+            and missing
+            and any(norm_path(p.path) in imported for p in shot.photos if p not in missing)
+            and any(norm_path(p.path) not in imported for p in missing)
+        )
+        for photo in shot.photos:
+            # An import cut short copied part of the pair: the rest is still to import.
+            status_of[photo.path] = classify([photo]) if unfinished else status
+
     groups: dict[tuple[str, str], CameraGroup] = {}
-    for photo in photos:
+    for photo in photos:  # in card order, so cameras are listed as they come
         camera_key = (photo.meta.make or "", photo.meta.model or "")
         group = groups.get(camera_key)
         if group is None:
@@ -218,21 +266,9 @@ def build_plan(
                 camera=camera or Camera.default_for(*camera_key), registered=camera is not None
             )
             groups[camera_key] = group
-        newest = newest_by_model.get((photo.meta.model or "").strip())
-        if photo.key in existing_keys:
-            group.already.append(photo)
-        elif photo.key in deleted_keys:
-            if newest_present_by_model is not None and photo.meta.capture_time:
-                present = newest_present_by_model.get((photo.meta.model or "").strip())
-                if present is None or photo.meta.capture_time > present:
-                    group.recent_deleted.append(photo)
-                    continue
-            group.deleted.append(photo)
-        elif newest and photo.meta.capture_time and photo.meta.capture_time < newest:
-            group.older.append(photo)
-        else:
-            group.new.append(photo)
-    return ImportPlan(source, target_dir, list(groups.values()))
+        getattr(group, status_of[photo.path]).append(photo)
+    in_library = {p.path for p in photos if p.key in existing_keys}
+    return ImportPlan(source, target_dir, list(groups.values()), in_library=in_library)
 
 
 @dataclass

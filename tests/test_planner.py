@@ -36,8 +36,9 @@ def test_already_imported_photos_are_excluded(tmp_path, card, reader):
 
     plan = build_plan(card, tmp_path / "t", photos, existing, {})
 
-    assert plan.new_count == 2
-    assert plan.already_count == 1
+    # photos[0] is the RAW of the R0000001 pair: its JPG counts as imported with it.
+    assert plan.new_count == 1
+    assert plan.already_count == 2
 
 
 def test_source_without_dcim_is_scanned_directly(tmp_path, reader):
@@ -59,15 +60,14 @@ def test_photos_deleted_since_import_are_skipped_unless_included(tmp_path, card,
 
     plan = build_plan(card, tmp_path / "t", photos, set(), {}, deleted_keys={jpg.key})
 
-    assert (plan.new_count, plan.deleted_count, plan.copy_count) == (2, 1, 2)
-    assert _by_name(i.photo for i in plan.items) == ["R0000001.DNG", "R0000002.JPG"]
-    assert plan.summary() == (
-        "2 new photos · 0 already imported · 1 deleted since import (skipped)"
-    )
+    # The JPG's RAW goes with it: the whole pair was deleted since import.
+    assert (plan.new_count, plan.deleted_count, plan.copy_count) == (1, 2, 1)
+    assert _by_name(i.photo for i in plan.items) == ["R0000002.JPG"]
+    assert plan.summary() == ("1 new photo · 0 already imported · 2 deleted since import (skipped)")
 
     plan.include_deleted = True
     assert plan.copy_count == 3
-    assert "1 deleted since import (included)" in plan.summary()
+    assert "2 deleted since import (included)" in plan.summary()
 
 
 def test_deleted_photos_newer_than_library_are_recent(tmp_path, card, reader):
@@ -177,3 +177,103 @@ def test_card_title_and_subtitle(tmp_path):
     assert card_subtitle(plan) == (
         "2 photos taken Dec 30, 2025 – Jan 2, 2026 · nothing new since your last import"
     )
+
+
+# A RAW+JPG pair is decided together. The card: R0000001 JPG+DNG (10:00), R0000002 JPG (10:05).
+
+
+def _pair_plan(tmp_path, card, reader, **kwargs):
+    from photoimporter.core.models import norm_path
+
+    photos = {p.filename: p for p in scan_source(card, reader)}
+    existing = {photos[n].key for n in kwargs.pop("in_library", ())}
+    deleted = {photos[n].key for n in kwargs.pop("deleted", ())}
+    imported = {norm_path(photos[n].path) for n in kwargs.pop("imported", ())}
+    plan = build_plan(
+        card,
+        tmp_path / "t",
+        list(photos.values()),
+        existing,
+        {},
+        deleted_keys=deleted,
+        imported_sources=imported,
+        **kwargs,
+    )
+    return {p.filename: plan.status_of(p) for p in photos.values()}, plan
+
+
+def test_one_file_of_a_pair_in_the_library_makes_the_pair_imported(tmp_path, card, reader):
+    # The RAW was kept and the JPG deleted (or replaced by an export) long ago.
+    statuses, plan = _pair_plan(
+        tmp_path, card, reader, in_library=["R0000001.DNG"],
+        newest_by_model={RICOH["model"]: "2026:12:01 00:00:00"},
+    )  # fmt: skip
+    assert statuses == {
+        "R0000001.DNG": "already",
+        "R0000001.JPG": "already",
+        "R0000002.JPG": "older",
+    }
+    assert plan.in_library == {p.path for p in plan.photos("already") if p.filename.endswith("DNG")}
+    assert plan.copy_count == 0  # nothing of the pair is copied unless re-importing
+
+    # The same with the JPG kept: the RAW isn't offered either.
+    statuses, _ = _pair_plan(tmp_path, card, reader, in_library=["R0000001.JPG"])
+    assert statuses["R0000001.DNG"] == "already"
+
+
+def test_pair_that_is_the_newest_photo_is_not_offered_as_new(tmp_path, card, reader):
+    # Only the RAW is in the library and it's the newest photo from this camera: the JPG
+    # used to count as New (not older than the newest) and would have been imported.
+    statuses, _ = _pair_plan(
+        tmp_path, card, reader, in_library=["R0000001.DNG"],
+        newest_by_model={RICOH["model"]: "2026:11:02 10:00:00"},
+    )  # fmt: skip
+    assert statuses["R0000001.JPG"] == "already"
+    assert statuses["R0000002.JPG"] == "new"
+
+
+def test_one_file_of_a_pair_in_the_deleted_history_makes_the_pair_deleted(tmp_path, card, reader):
+    statuses, _ = _pair_plan(
+        tmp_path, card, reader, deleted=["R0000001.JPG"],
+        newest_by_model={RICOH["model"]: "2026:11:02 10:00:00"},
+        newest_present_by_model={RICOH["model"]: "2026:11:02 10:00:00"},
+    )  # fmt: skip
+    assert statuses["R0000001.DNG"] == statuses["R0000001.JPG"] == "deleted"
+
+    statuses, _ = _pair_plan(
+        tmp_path, card, reader, deleted=["R0000001.DNG"],
+        newest_by_model={RICOH["model"]: "2026:11:02 10:00:00"},
+        newest_present_by_model={},
+    )  # fmt: skip
+    assert statuses["R0000001.DNG"] == statuses["R0000001.JPG"] == "recent_deleted"
+
+    # In the library beats deleted: the pair is imported.
+    statuses, _ = _pair_plan(
+        tmp_path, card, reader, in_library=["R0000001.DNG"], deleted=["R0000001.JPG"]
+    )
+    assert statuses["R0000001.DNG"] == statuses["R0000001.JPG"] == "already"
+
+
+def test_pair_with_neither_file_known_is_unchanged(tmp_path, card, reader):
+    statuses, _ = _pair_plan(
+        tmp_path, card, reader, newest_by_model={RICOH["model"]: "2026:11:02 10:01:00"}
+    )
+    assert statuses == {"R0000001.DNG": "older", "R0000001.JPG": "older", "R0000002.JPG": "new"}
+
+
+def test_import_cut_short_halfway_through_a_pair_still_offers_the_rest(tmp_path, card, reader):
+    # This app copied the JPG but stopped before the RAW: the RAW is still to import.
+    statuses, _ = _pair_plan(
+        tmp_path, card, reader, in_library=["R0000001.JPG"], imported=["R0000001.JPG"],
+        newest_by_model={RICOH["model"]: "2026:11:02 10:00:00"},
+    )  # fmt: skip
+    assert statuses["R0000001.JPG"] == "already"
+    assert statuses["R0000001.DNG"] == "new"
+
+    # Both were copied, and the JPG later deleted: the pair counts as imported.
+    statuses, _ = _pair_plan(
+        tmp_path, card, reader, in_library=["R0000001.DNG"],
+        imported=["R0000001.JPG", "R0000001.DNG"],
+        newest_by_model={RICOH["model"]: "2026:11:02 10:00:00"},
+    )  # fmt: skip
+    assert statuses["R0000001.JPG"] == "already"

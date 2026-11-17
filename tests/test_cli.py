@@ -33,16 +33,17 @@ def test_deleted_photos_need_include_flag(tmp_path, card, library, reader, capsy
 
     assert run("import", str(card), "--target", str(library / "t"), "--yes") == 0
     out = capsys.readouterr().out
-    assert "1 recently deleted (skipped), 1 deleted since import (skipped)" in out
-    assert "--include-recent-deleted" in out and "--include-deleted" in out
+    # R0000001's RAW is still in the library, so that pair counts as imported.
+    assert "2 already imported, 1 recently deleted (skipped)" in out
+    assert "deleted since import" not in out
+    assert "--include-recent-deleted" in out
     assert "Nothing new to import." in out
 
     args = ("import", str(card), "--target", str(library / "t"), "--yes")
     run(*args, "--include-recent-deleted")
     assert (jpgs / "R0000002.JPG").is_file()
-    assert not (jpgs / "R0000001.JPG").exists()
     run(*args, "--include-deleted")
-    assert (jpgs / "R0000001.JPG").is_file()
+    assert not (jpgs / "R0000001.JPG").exists()
 
 
 def test_camera_set_changes_folder_name(tmp_path, card, library, reader, capsys):
